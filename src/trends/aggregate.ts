@@ -395,19 +395,31 @@ function cellMetric(cell: TrendCell, metric: TrendMetric): number {
 	return metric === "cost" ? cell.cost : cellTokens(cell);
 }
 
-/** Flatten hourly buckets in [from, to] into a sorted array of [hourStart, key, cell]. */
-function flattenHourly(
-	data: TrendsData,
-	fromMs: number | undefined,
-): { hourStart: number; key: string; cell: TrendCell }[] {
-	const rows: { hourStart: number; key: string; cell: TrendCell }[] = [];
-	for (const [hourStart, bucket] of data.hourly) {
-		if (fromMs !== undefined && hourStart < fromMs) continue;
-		for (const [key, cell] of bucket) {
-			rows.push({ hourStart, key, cell });
+interface FlatRow {
+	hourStart: number;
+	key: string;
+	cell: TrendCell;
+}
+
+const flattenCache = new WeakMap<TrendsData, FlatRow[]>();
+
+/** Flatten hourly buckets into a time-sorted array; memoized per TrendsData. */
+function flattenHourly(data: TrendsData, fromMs?: number): FlatRow[] {
+	let all = flattenCache.get(data);
+	if (!all) {
+		all = [];
+		for (const [hourStart, bucket] of data.hourly) {
+			for (const [key, cell] of bucket) {
+				all.push({ hourStart, key, cell });
+			}
 		}
+		all.sort((a, b) => a.hourStart - b.hourStart);
+		flattenCache.set(data, all);
 	}
-	return rows.sort((a, b) => a.hourStart - b.hourStart);
+	if (fromMs === undefined) return all;
+	let low = 0;
+	while (low < all.length && all[low]!.hourStart < fromMs) low += 1;
+	return all.slice(low);
 }
 
 /** Model/provider distribution rows sorted by cost then tokens, descending. */
@@ -463,10 +475,17 @@ export function chartSeries(
 	options: { fromMs?: number; toMs?: number; metric: TrendMetric; groupBy: "provider" | "model" | "total" },
 ): { bucketMs: number; startMs: number; bucketCount: number; series: ChartSeries[] } {
 	const now = options.toMs ?? Date.now();
-	const fromMs = options.fromMs ?? Math.min(...[...data.hourly.keys(), now - HOUR_MS]);
+	let fromMs = options.fromMs;
+	if (fromMs === undefined) {
+		fromMs = now - HOUR_MS;
+		for (const hourStart of data.hourly.keys()) {
+			if (hourStart < fromMs) fromMs = hourStart;
+		}
+	}
 	const spanMs = Math.max(HOUR_MS, now - fromMs);
 	const bucketMs = spanMs <= 8 * 86_400_000 ? HOUR_MS : 86_400_000;
-	const startMs = Math.floor(fromMs / bucketMs) * bucketMs;
+	// Day buckets align to local midnight so chart, heatmap and sparkline agree.
+	const startMs = bucketMs === 86_400_000 ? dayStart(fromMs) : Math.floor(fromMs / bucketMs) * bucketMs;
 	const bucketCount = Math.max(1, Math.ceil((now - startMs) / bucketMs));
 
 	const buckets = new Map<string, number[]>();
@@ -485,7 +504,9 @@ export function chartSeries(
 		series[index] = (series[index] ?? 0) + value;
 		totals[index] = (totals[index] ?? 0) + value;
 	}
-	const ranked = [...buckets.entries()].sort((a, b) => sum(b[1]) - sum(a[1]));
+	const ranked = [...buckets.entries()]
+		.filter(([, values]) => sum(values) > 0)
+		.sort((a, b) => sum(b[1]) - sum(a[1]));
 	const series: ChartSeries[] = [];
 	if (options.groupBy !== "total") {
 		series.push({
@@ -493,10 +514,8 @@ export function chartSeries(
 			points: totals.map((value, index) => ({ bucketStart: startMs + index * bucketMs, value })),
 		});
 	}
-	ranked.forEach(([name, values], rank) => {
-		if (rank < 5) {
-			series.push({ label: name, points: values.map((value, index) => ({ bucketStart: startMs + index * bucketMs, value })) });
-		}
+	ranked.slice(0, 5).forEach(([name, values]) => {
+		series.push({ label: name, points: values.map((value, index) => ({ bucketStart: startMs + index * bucketMs, value })) });
 	});
 	return { bucketMs, startMs, bucketCount, series };
 }

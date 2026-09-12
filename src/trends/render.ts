@@ -78,21 +78,22 @@ export function sparklineString(days: number[]): string {
 // ── Model distribution bars ──────────────────────────────────────────────
 
 export function renderModelBars(
-	rows: { label: string; tokens: number }[],
+	rows: { label: string; value: number }[],
 	theme: ThemeLike,
 	width: number,
+	formatValue: (value: number) => string = formatTokens,
 ): string[] {
-	const total = rows.reduce((sum, row) => sum + row.tokens, 0);
+	const total = rows.reduce((sum, row) => sum + row.value, 0);
 	const lines: string[] = [];
 	for (const row of rows) {
-		const share = total > 0 ? row.tokens / total : 0;
+		const share = total > 0 ? row.value / total : 0;
 		const label = row.label.length > 24 ? `${row.label.slice(0, 23)}…` : row.label;
-		const countWidth = Math.max(4, String(formatTokens(row.tokens)).length + String(Math.round(share * 100)).length + 4);
+		const countWidth = Math.max(4, formatValue(row.value).length + String(Math.round(share * 100)).length + 4);
 		const barWidth = Math.max(4, Math.min(30, width - label.length - countWidth - 4));
 		const filled = Math.round(share * barWidth);
 		const bar = `${"█".repeat(filled)}${"░".repeat(Math.max(0, barWidth - filled))}`;
 		lines.push(
-			`  ${theme.fg("muted", label.padEnd(24).slice(0, 24))} ${theme.fg("accent", bar)} ${String(Math.round(share * 100)).padStart(3)}%  ${theme.fg("dim", formatTokens(row.tokens))}`,
+			`  ${theme.fg("muted", label.padEnd(24).slice(0, 24))} ${theme.fg("accent", bar)} ${String(Math.round(share * 100)).padStart(3)}%  ${theme.fg("dim", formatValue(row.value))}`,
 		);
 	}
 	return lines;
@@ -181,7 +182,7 @@ export function renderBrailleChart(
 	formatValue: (value: number) => string = formatTokens,
 ): string[] {
 	const plotHeight = Math.max(4, height);
-	const labelWidth = Math.max(6, ...series.map((s) => formatTokens(Math.max(...s.values, 0))).map((text) => text.length));
+	const labelWidth = Math.max(6, ...series.map((s) => formatValue(Math.max(...s.values, 0)).length));
 	const plotWidth = Math.max(10, width - labelWidth - 3);
 	const dotWidth = plotWidth * 2;
 	const dotHeight = plotHeight * 4;
@@ -189,8 +190,9 @@ export function renderBrailleChart(
 	const masks: number[][] = Array.from({ length: plotHeight }, () => new Array<number>(plotWidth).fill(0));
 	const owners: number[][] = Array.from({ length: plotHeight }, () => new Array<number>(plotWidth).fill(-2));
 
-	const yMax = Math.max(1, ...series.map((s) => Math.max(...s.values, 0)));
-	series.forEach((seriesEntry, seriesIndex) => {
+	const drawn = series.filter((entry) => entry.values.some((value) => value > 0));
+	const yMax = Math.max(1, ...drawn.map((s) => Math.max(...s.values, 0)));
+	drawn.forEach((seriesEntry, seriesIndex) => {
 		const count = seriesEntry.values.length;
 		if (count === 0) return;
 		const setDot = (x: number, y: number): void => {
@@ -200,13 +202,19 @@ export function renderBrailleChart(
 			masks[row]![col]! |= DOT_BITS[x % 2]![y % 4]!;
 			owners[row]![col] = seriesIndex;
 		};
+		// Active range: only draw between the first and last nonzero bucket so
+		// stopped series do not leave a long horizontal zero tail.
+		let firstIndex = 0;
+		let lastIndex = count - 1;
+		while (firstIndex < count && seriesEntry.values[firstIndex]! <= 0) firstIndex += 1;
+		while (lastIndex >= 0 && seriesEntry.values[lastIndex]! <= 0) lastIndex -= 1;
 		const previous = seriesEntry.values.map((value, index) => ({
 			x: count === 1 ? dotWidth - 1 : Math.round((index / (count - 1)) * (dotWidth - 1)),
 			y: Math.round((1 - value / yMax) * (dotHeight - 1)),
 		}));
-		for (let index = 0; index < previous.length; index++) {
+		for (let index = firstIndex; index <= lastIndex; index++) {
 			setDot(previous[index]!.x, previous[index]!.y);
-			if (index > 0) {
+			if (index > firstIndex) {
 				const from = previous[index - 1]!;
 				const to = previous[index]!;
 				const steps = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), 1);
@@ -247,7 +255,7 @@ export function renderBrailleChart(
 	const endLabel = formatDayLabel(endMs);
 	const midTime = (startMs + endMs) / 2;
 	const midLabel = formatDayLabel(midTime);
-	const hasMid = plotWidth >= startLabel.length + endLabel.length + 14;
+	const hasMid = plotWidth >= startLabel.length + endLabel.length + midLabel.length + 10;
 	let axis = " ".repeat(labelWidth + 2);
 	const midCol = hasMid ? Math.floor(plotWidth / 2 - midLabel.length / 2) : -1;
 	for (let col = 0; col < plotWidth; col++) {
@@ -311,6 +319,7 @@ export function renderTable(
 	width: number,
 	expanded: Set<string>,
 	selected: number,
+	totalSessions?: number,
 ): string[] {
 	const nameWidth = Math.min(26, Math.max(16, Math.floor(width * 0.35)));
 	const columns = fitColumns(width, nameWidth);
@@ -357,9 +366,17 @@ export function renderTable(
 		{ messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, provider: "", model: "", sessions: 0 },
 	);
 	lines.push(theme.fg("dim", "─".repeat(Math.min(width, nameWidth + columns.reduce((total2, column) => total2 + column.width + 2, 0)))));
+	const totalSessionsValue = totalSessions !== undefined ? formatCount(totalSessions) : "-";
+	const totalRow: DistributionRow = { ...total, sessions: 0, provider: "", model: "" };
 	lines.push(
 		theme.bold("Total".padEnd(nameWidth)) +
-			columns.map((column) => theme.bold(column.value(total as unknown as DistributionRow).padStart(column.width + 1))).join(""),
+			columns
+				.map((column) =>
+					theme.bold(
+						(column.header === "Sessions" ? totalSessionsValue : column.value(totalRow)).padStart(column.width + 1),
+					),
+				)
+				.join(""),
 	);
 	return lines;
 }

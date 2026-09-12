@@ -157,7 +157,10 @@ export class TrendsDashboard implements Component {
 		);
 		const costRows = distributionRows(data, fromMs);
 		const totalCost = costRows.reduce((sum, row) => sum + row.cost, 0);
-		const formatValue = metric === "cost" ? (value: number) => `$${value < 10 ? value.toFixed(2) : Math.round(value)}` : formatTokens;
+		// Axis labels get fractional mid values; the token formatter must round.
+		const formatValue = metric === "cost"
+			? (value: number) => `$${value < 10 ? value.toFixed(2) : Math.round(value)}`
+			: (value: number) => formatTokens(Math.round(value));
 		const summaryParts = [
 			`${theme.fg("dim", "Total")} ${metric === "cost" ? formatCost(total) : formatTokens(total)}`,
 			`${theme.fg("dim", "Cost")} ${formatCost(totalCost)}`,
@@ -183,7 +186,7 @@ export class TrendsDashboard implements Component {
 		const models = distributionRows(data, fromMs)
 			.filter((row) => row.model !== "summaries")
 			.slice(0, 5)
-			.map((row) => ({ label: row.model, tokens: row.tokens }));
+			.map((row) => ({ label: row.model, value: metric === "cost" ? row.cost : row.tokens }));
 		return [
 			` ${summaryParts.join(theme.fg("dim", " · "))}`,
 			"",
@@ -191,7 +194,7 @@ export class TrendsDashboard implements Component {
 			` ${renderChartLegend(chart.series, theme)}`,
 			"",
 			` ${theme.fg("dim", `Models · ${period}`)}`,
-			...renderModelBars(models, theme, width - 2),
+			...renderModelBars(models, theme, width - 2, formatValue),
 		];
 	}
 
@@ -210,12 +213,16 @@ export class TrendsDashboard implements Component {
 		];
 		if (peak && peak.value > 0) {
 			const formatted = metric === "cost" ? formatCost(peak.value) : formatTokens(peak.value);
+			const unit = metric === "cost" ? "" : " tokens";
 			lines.push(
-				` ${theme.fg("dim", `Peak ${formatted} tokens on`)} ${formatShortDate(peak.dayStart)} ${theme.fg("dim", "· Total")} ${
+				` ${theme.fg("dim", `Peak ${formatted}${unit} on`)} ${formatShortDate(peak.dayStart)} ${theme.fg("dim", "· Total")} ${
 					metric === "cost" ? formatCost(total) : formatTokens(total)
 				}`,
 			);
 		}
+		lines.push(
+			` ${theme.fg("muted", "░ none")}  ${theme.fg("dim", "▒ light")}  ${theme.fg("text", "▓ mid")}  ${theme.fg("accent", "█ heavy")}`,
+		);
 		return lines;
 	}
 
@@ -257,8 +264,14 @@ export class TrendsDashboard implements Component {
 		const theme = this.theme;
 		const groups = this.tableGroups();
 		if (groups.length === 0) return [` ${theme.fg("muted", "No usage recorded in this period")}`];
+		// Total-row session count: union across models, not the (double-counting) sum.
+		const data = this.data!;
+		const { fromMs } = this.range();
+		const sessionUnion = new Set(
+			distributionRows(data, fromMs).flatMap((row) => [...(data.sessions.get(`${row.provider} ${row.model}`) ?? [])]),
+		);
 		return [
-			...renderTable(groups, theme, width - 2, this.expanded, this.selected),
+			...renderTable(groups, theme, width - 2, this.expanded, this.selected, sessionUnion.size),
 			` ${tableFootnote(theme)} ${theme.fg("dim", `· ${period}`)}`,
 		];
 	}

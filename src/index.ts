@@ -261,10 +261,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// Session tokens/cost are local data: refresh immediately after every turn
-	// instead of waiting for the provider quota polling cycle.
+	// instead of waiting for the provider quota polling cycle. The sparkline's
+	// today-bucket moves too; getTrends' TTL keeps this cheap.
 	pi.on("turn_end", async (_event, ctx) => {
 		consumption = sumSessionUsage(ctx.sessionManager.getEntries());
 		updateStatus();
+		refreshSparkline();
 	});
 
 	pi.on("model_select", async (event) => {

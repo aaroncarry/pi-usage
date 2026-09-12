@@ -77,7 +77,7 @@ function renderTrendsSummary(trends: CardTrendsSummary, theme: ThemeLike): Text[
 			0,
 		),
 	];
-	for (const line of renderModelBars(trends.models, theme, 50)) {
+	for (const line of renderModelBars(trends.models.map((model) => ({ label: model.label, value: model.tokens })), theme, 50)) {
 		children.push(new Text(line, 0, 0));
 	}
 	return children;

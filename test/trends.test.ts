@@ -162,14 +162,14 @@ test("blockBars and sparklineString render 8-level bars", () => {
 });
 
 test("renderBrailleChart encodes points into braille cells", () => {
-	const series = [{ label: "Total", values: [0, 100] }];
-	const lines = renderBrailleChart(series, PLAIN_THEME, 40, 4, NOW - HOUR, NOW);
+	// Flat nonzero series draws a full-width line on the top plot row (the
+	// y-axis label and plot row 0 share the first output line).
+	const lines = renderBrailleChart([{ label: "Total", values: [50, 50] }], PLAIN_THEME, 40, 4, NOW - HOUR, NOW);
 	assert.ok(lines.length >= 5, "height + axis row");
-	const body = lines.slice(1, -1).join("");
-	assert.match(body, /[\u2800-\u28ff]/, "contains braille glyphs");
-	// First point (value 0) sits on the bottom row of the plot.
-	const bottomRow = lines[lines.length - 2]!;
-	assert.match(bottomRow, /[\u2800-\u28ff]/);
+	assert.match(lines[0]!, /[⠀-⣿].*[⠀-⣿]/, "spans the plot width");
+	// Zero-value series are dropped entirely.
+	const empty = renderBrailleChart([{ label: "Total", values: [0, 0] }], PLAIN_THEME, 40, 4, NOW - HOUR, NOW);
+	assert.doesNotMatch(empty.join(""), /[⠁-⣿]/, "only blank braille base chars remain");
 });
 
 test("renderHeatmap draws one row per weekday", () => {
@@ -183,8 +183,8 @@ test("renderHeatmap draws one row per weekday", () => {
 test("renderModelBars shows share and tokens", () => {
 	const lines = renderModelBars(
 		[
-			{ label: "glm", tokens: 9600 },
-			{ label: "luna", tokens: 400 },
+			{ label: "glm", value: 9600 },
+			{ label: "luna", value: 400 },
 		],
 		PLAIN_THEME,
 		60,
