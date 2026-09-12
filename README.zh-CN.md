@@ -1,0 +1,130 @@
+# pi-usage
+
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
+一个 [pi](https://github.com/earendil-works/pi) 扩展：查看各订阅账号的余额与用量窗口——footer 状态行常显当前账号，`/usage` 卡片查看全部明细。查询方法参考
+[CodexBar](https://github.com/steipete/CodexBar)，凭据直接复用 pi 统一存储的
+`auth.json`，不读取任何第三方凭据文件。
+
+## 效果
+
+footer 状态行（默认模式）跟随当前模型，显示其额度窗口和本次会话消耗：
+
+```
+Codex 5h 13% · weekly 2% · session 10.0k tok $0.020
+```
+
+`/usage` 向会话流打印一张卡片（自定义条目渲染——非弹窗、不抢焦点）：
+
+```
+ Usage · 02:15
+
+ ● Codex (Plus)
+   5h      ░░░░░░░░░░   0% · resets in 4h 54m
+   weekly  ░░░░░░░░░░   2% · resets in 6d 17h
+ ○ GLM
+   Balance ¥21.46  recharged ¥118.00 · spent ¥96.54
+ ○ DeepSeek
+   Balance ¥38.48
+```
+
+## 命令
+
+| 命令 | 作用 |
+|---|---|
+| `/usage` | 向会话流打印用量卡片。重复执行即刷新：5 分钟 TTL 内秒回，过期则重新拉取（15 秒超时）。卡片留存在会话里，`/reload`、恢复旧会话时自动重放 |
+| `/usage active\|all\|off` | 立即切换 footer 状态行模式，并持久化到 `usage.json`（输入时有补全） |
+| `pi --usage-status all` | 指定本次运行的 footer 模式（覆盖 `usage.json`，不写回文件） |
+
+优先级：`/usage <mode>`（会话内）> `--usage-status`（本次启动）> `usage.json`（持久）。
+
+## footer 状态行
+
+| 模式 | 显示内容 |
+|---|---|
+| `active`（默认） | 当前模型对应账号的全部窗口 + 余额，末尾追加会话消耗。切换模型即时跟随 |
+| `all` | 全部账号压成一行——当前账号在前、正常亮度，其余置灰，消耗段固定在行尾 |
+| `off` | 整行隐藏 |
+
+- 消耗段（`session <tokens> tok`）每轮对话结束**即时更新**（本地数据，与 pi footer 同口径）。真实费用仅在非零时追加（`· $0.020`）——订阅账号恒为 0，自动省略。
+- 账号查询失败时显示红色的 `账号名 !`。
+
+## 支持的账号
+
+auth.json 里有凭据的自动识别，无需配置：
+
+| auth.json key | 查询接口 | 显示内容 |
+|---|---|---|
+| `openai-codex` | `GET chatgpt.com/backend-api/wham/usage`（Bearer OAuth token） | 5h/周窗口、credits、月度花销上限 |
+| `zai` | `GET api.z.ai/api/monitor/usage/quota/limit`（CN 区 `open.bigmodel.cn`），无 coding plan 时回退 bigmodel.cn 余额接口 | 5h/周/MCP 窗口或人民币余额 |
+| `deepseek` | `GET api.deepseek.com/user/balance` | 账户余额 |
+| 任意自定义 provider | 配置驱动的通用适配器（见下） | 余额 / 窗口 |
+
+## 凭据与安全
+
+- OAuth token 经 pi 的 model registry 解析（`getProviderAuth`），临期自动刷新并写回 auth.json；registry 不认识的 provider 回退为直读 auth.json。
+- API key 复用 pi 的插值规则（`$ENV`/`${ENV}`、`$$`/`$!` 转义、`!command`）。
+- 用量接口均为未公开接口，可能随服务商改版失效；查询频率受 TTL 限制。
+
+## 安装
+
+```sh
+pi install npm:@aaroncarry/pi-usage
+```
+
+或在 settings.json 的 `packages` 里手动添加，开发期也可以指向本地目录：
+
+```json
+{
+  "packages": ["npm:@aaroncarry/pi-usage"]
+}
+```
+
+## 配置
+
+可选配置文件 `<agentDir>/usage.json`：
+
+```json
+{
+  "intervalMinutes": 5,
+  "status": "active",
+  "providers": {
+    "zai": { "region": "cn", "label": "GLM" },
+    "deepseek": { "enabled": false },
+    "lingsuan": {
+      "label": "LingSuan",
+      "custom": {
+        "url": "https://relay.example/api/status",
+        "headers": { "Authorization": "Bearer {token}" },
+        "balancePath": "data.availableBalance",
+        "currency": "CNY",
+        "windowsPath": "data.limits",
+        "windowFields": { "label": "name", "percent": "percentage", "resetsAt": "reset_at" }
+      }
+    }
+  }
+}
+```
+
+- `intervalMinutes`：后台刷新间隔（默认 5，最小 1）。
+- `status`：`active`（默认）/ `all` / `off`。
+- `providers.<id>.enabled: false`：从状态行和卡片隐藏某账号。
+- `providers.<id>.label`：显示名覆盖。
+- `providers.<id>.region`：z.ai 区域 `auto`（默认）/`global`/`cn`。
+- `custom`：通用适配器，接入任意 JSON 接口——`headers` 支持 `$ENV` 插值和 `{token}` 占位符（取该 provider 在 auth.json 里的凭据，若有）；`balancePath`/`windowsPath` 为 JSON 点路径（如 `data.list[0].percent`）。
+
+## 开发
+
+```sh
+npm install --ignore-scripts
+npm run typecheck
+npm test
+```
+
+改完代码在 pi 里 `/reload` 即可生效（本地路径是原地引用）。
+
+## 已知限制
+
+- DeepSeek 的用量数据在平台网页 session 后面，API key 查不到，只显示余额。
+- 订阅账号（OAuth 登录）显示的 `$` 是 pi 按模型目录单价估算的理论费用，并非真实扣费；真实消耗以服务端额度窗口为准。
+- 状态行是 TUI 特性；`/usage` 卡片在任意模式下都会写入会话。

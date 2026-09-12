@@ -1,0 +1,48 @@
+{
+	"name": "@aaroncarry/pi-usage",
+	"version": "0.1.0",
+	"description": "Usage and balance viewer for pi: subscription quota windows, prepaid balances, and session consumption in a footer status line and a /usage card",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/aaroncarry/pi-usage.git"
+	},
+	"bugs": {
+		"url": "https://github.com/aaroncarry/pi-usage/issues"
+	},
+	"homepage": "https://github.com/aaroncarry/pi-usage#readme",
+	"files": ["src", "README.md", "README.zh-CN.md", "LICENSE"],
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"pi-coding-agent",
+		"usage",
+		"balance",
+		"quota",
+		"codex",
+		"openai",
+		"glm",
+		"zai",
+		"deepseek"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"pi": {
+		"extensions": ["./src/index.ts"]
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "node --test"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "0.85.1",
+		"@earendil-works/pi-tui": "0.85.1",
+		"@types/node": "22.20.2",
+		"typescript": "5.9.3"
+	}
+}
