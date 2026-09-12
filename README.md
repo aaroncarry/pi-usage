@@ -54,6 +54,9 @@ Accounts with a credential in pi's `auth.json` are detected automatically; nothi
 | auth.json key | Query | Shows |
 |---|---|---|
 | `openai-codex` | `GET chatgpt.com/backend-api/wham/usage` (Bearer OAuth token) | 5h/weekly windows, credits, monthly spend cap |
+| `anthropic` | `GET api.anthropic.com/api/oauth/usage` (Claude Code OAuth token, `anthropic-beta: oauth-2025-04-20`) | 5h/weekly windows, extra usage |
+| `github-copilot` | `GET github.com/copilot_internal/user` (GitHub OAuth token, `token` scheme) | premium/chat quota windows, plan, reset date |
+| `openrouter` | `GET openrouter.ai/api/v1/credits` (API key or OAuth token) | Prepaid credits balance |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` (CN region: `open.bigmodel.cn`); falls back to the bigmodel.cn balance endpoint when the key has no coding plan | 5h/weekly/MCP windows, or CNY balance |
 | `deepseek` | `GET api.deepseek.com/user/balance` | Account balance |
 | any custom provider | Config-driven generic adapter (see below) | Balance / windows |
@@ -123,6 +126,8 @@ After changing the code, `/reload` inside pi picks it up (local checkouts are re
 
 ## Known limitations
 
+- Kimi Coding (`kimi-coding`) is not supported yet: pi stores a token for `api.kimi.com/coding`, and no usage endpoint accepting it has been verified.
+- The Claude, Copilot, and OpenRouter adapters mirror the endpoints and response shapes used by CodexBar; they have not been verified against live accounts yet. Issue reports with the actual response payload are welcome.
 - DeepSeek usage data lives behind the platform web session and cannot be queried with the API key; only the balance is shown.
 - The `$` figure shown for subscription (OAuth) accounts is pi's list-price estimate, not an actual charge; real consumption is the server-side quota window.
 - The panel and status line are TUI features; the `/usage` card itself is written in every mode.

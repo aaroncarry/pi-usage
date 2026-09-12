@@ -6,13 +6,16 @@ import { test } from "node:test";
 import { codexAdapter } from "../src/providers/codex.ts";
 import { deepseekAdapter } from "../src/providers/deepseek.ts";
 import { zaiAdapter } from "../src/providers/zai.ts";
+import { anthropicAdapter } from "../src/providers/anthropic.ts";
+import { githubCopilotAdapter } from "../src/providers/github-copilot.ts";
+import { openrouterAdapter } from "../src/providers/openrouter.ts";
 import { createCustomAdapter, dotPath } from "../src/providers/custom.ts";
 import { resolveConfigValue, resolveProviderToken } from "../src/credentials.ts";
 import type { FetchLike } from "../src/types.ts";
 
 /** Scripted fetch: matches by URL prefix, records every call. */
 class ScriptedFetch {
-	readonly urls: string[] = [];
+	readonly calls: { url: string; init?: RequestInit }[] = [];
 	private readonly handlers: { prefix: string; respond: () => Response }[];
 
 	constructor(handlers: { prefix: string; respond: () => Response }[]) {
@@ -20,12 +23,16 @@ class ScriptedFetch {
 	}
 
 	get fetchImpl(): FetchLike {
-		return async (url: string) => {
-			this.urls.push(url);
+		return async (url: string, init?: RequestInit) => {
+			this.calls.push({ url, init });
 			const handler = this.handlers.find((entry) => url.startsWith(entry.prefix));
 			if (!handler) throw new Error(`unexpected fetch: ${url}`);
 			return handler.respond();
 		};
+	}
+
+	get urls(): string[] {
+		return this.calls.map((call) => call.url);
 	}
 }
 
@@ -287,4 +294,71 @@ test("resolveProviderToken falls back to auth.json for api_key and expired oauth
 
 	rmSync(agentDir, { recursive: true, force: true });
 	delete process.env.PI_USAGE_TEST_KEY;
+});
+
+test("anthropic adapter parses Claude OAuth usage windows", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://api.anthropic.com/api/oauth/usage",
+			respond: () =>
+				jsonResponse({
+					five_hour: { utilization: 42, resets_at: "2026-09-13T12:00:00Z" },
+					seven_day: { utilization: 10, resets_at: "2026-09-19T00:00:00Z" },
+					extra_usage: { is_enabled: true, monthly_limit: 100, used_credits: 20 },
+				}),
+		},
+	]);
+	const balance = await anthropicAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.label, "Claude");
+	assert.deepEqual(
+		balance.windows.map((window) => window.label),
+		["5h", "weekly"],
+	);
+	assert.equal(balance.windows[0]?.usedPercent, 42);
+	assert.equal(balance.windows[0]?.resetsAt, Date.parse("2026-09-13T12:00:00Z"));
+	assert.deepEqual(balance.notes, ["extra usage: 20 of 100"]);
+	const headers = scripted.calls[0]?.init?.headers as Record<string, string>;
+	assert.equal(headers["anthropic-beta"], "oauth-2025-04-20");
+});
+
+test("github-copilot adapter parses quota snapshots and skips placeholders", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://github.com/copilot_internal/user",
+			respond: () =>
+				jsonResponse({
+					copilot_plan: "copilot_pro",
+					quota_reset_date: "2026-10-01T00:00:00Z",
+					quota_snapshots: {
+						premium_interactions: { entitlement: 300, remaining: 150, percent_remaining: 50, unlimited: false, quota_id: "premium" },
+						chat: { entitlement: 0, remaining: 0, unlimited: true, quota_id: "chat" },
+						dead: { entitlement: 0, remaining: 0, percent_remaining: 0, unlimited: false, quota_id: "x" },
+					},
+				}),
+		},
+	]);
+	const balance = await githubCopilotAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.plan, "Copilot Pro");
+	assert.deepEqual(
+		balance.windows.map((window) => window.label),
+		["premium", "chat"],
+	);
+	assert.equal(balance.windows[0]?.usedPercent, 50);
+	assert.equal(balance.windows[1]?.detail, "unlimited");
+	assert.equal(balance.windows[0]?.resetsAt, Date.parse("2026-10-01T00:00:00Z"));
+	const headers = scripted.calls[0]?.init?.headers as Record<string, string>;
+	assert.match(headers.Authorization ?? "", /^token /, "GitHub expects the token scheme, not Bearer");
+});
+
+test("openrouter adapter computes balance from credits", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://openrouter.ai/api/v1/credits",
+			respond: () => jsonResponse({ data: { total_credits: 20, total_usage: 7.5 } }),
+		},
+	]);
+	const balance = await openrouterAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance?.amount, 12.5);
+	assert.equal(balance.balance?.currency, "USD");
+	assert.match(balance.balance?.note ?? "", /used \$7\.50 of \$20\.00/);
 });

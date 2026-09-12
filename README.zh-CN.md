@@ -56,6 +56,9 @@ auth.json 里有凭据的自动识别，无需配置：
 | auth.json key | 查询接口 | 显示内容 |
 |---|---|---|
 | `openai-codex` | `GET chatgpt.com/backend-api/wham/usage`（Bearer OAuth token） | 5h/周窗口、credits、月度花销上限 |
+| `anthropic` | `GET api.anthropic.com/api/oauth/usage`（Claude Code OAuth token，`anthropic-beta: oauth-2025-04-20`） | 5h/周窗口、extra usage |
+| `github-copilot` | `GET github.com/copilot_internal/user`（GitHub OAuth token，`token` scheme） | premium/chat 配额窗口、计划、重置日期 |
+| `openrouter` | `GET openrouter.ai/api/v1/credits`（API key 或 OAuth token） | 预付余额 |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit`（CN 区 `open.bigmodel.cn`），无 coding plan 时回退 bigmodel.cn 余额接口 | 5h/周/MCP 窗口或人民币余额 |
 | `deepseek` | `GET api.deepseek.com/user/balance` | 账户余额 |
 | 任意自定义 provider | 配置驱动的通用适配器（见下） | 余额 / 窗口 |
@@ -125,6 +128,8 @@ npm test
 
 ## 已知限制
 
+- Kimi Coding（`kimi-coding`）暂不支持：pi 存的是 `api.kimi.com/coding` 的 token，尚未验证到接受它的用量接口。
+- Claude、Copilot、OpenRouter 适配器的端点与响应结构照搬 CodexBar 的实现，尚未用真实账号验证过；欢迎带实际响应 payload 提 issue。
 - DeepSeek 的用量数据在平台网页 session 后面，API key 查不到，只显示余额。
 - 订阅账号（OAuth 登录）显示的 `$` 是 pi 按模型目录单价估算的理论费用，并非真实扣费；真实消耗以服务端额度窗口为准。
 - 状态行是 TUI 特性；`/usage` 卡片在任意模式下都会写入会话。
