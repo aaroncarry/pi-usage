@@ -61,7 +61,23 @@ auth.json 里有凭据的自动识别，无需配置：
 | `openrouter` | `GET openrouter.ai/api/v1/credits`（API key 或 OAuth token） | 预付余额 |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit`（CN 区 `open.bigmodel.cn`），无 coding plan 时回退 bigmodel.cn 余额接口 | 5h/周/MCP 窗口或人民币余额 |
 | `deepseek` | `GET api.deepseek.com/user/balance` | 账户余额 |
+| 其他任意已配置厂商 | **自动探测**（见下）：依次尝试 New API（`/dashboard/billing/*`）、Sub2API（`/usage`）、MiniMax、智谱等中转计费协议 | 余额或计划窗口，取决于网关暴露的接口 |
 | 任意自定义 provider | 配置驱动的通用适配器（见下） | 余额 / 窗口 |
+
+### 自定义厂商的自动探测
+
+pi 里没有专用适配器的厂商（例如通过
+[pi-provider-hub](https://github.com/aaroncarry/pi-provider-hub) 或 `models.json` 配置的中转），
+会基于 registry 中的 baseUrl 和已存凭据自动探测：
+
+- **New API** 网关：`dashboard/billing/subscription` + `dashboard/billing/usage`
+  （可用时再加 `/api/usage/token/`）→ 剩余美元余额与 used/total 明细。
+- **Sub2API** 网关：`usage` → 剩余余额。
+- `api.deepseek.com`、MiniMax 各域名、`open.bigmodel.cn` / `api.z.ai` 按域名固定协议。
+
+命中的协议在会话内固定；所有候选都拒绝（如 HTTP 404/401）时显示
+"no balance endpoint detected"，且不会每次刷新都重复探测；瞬时网络错误会自动重试。
+在 usage.json 里设 `"autoDetect": false` 可全局关闭，或 `providers.<id>.enabled: false` 单独隐藏。
 
 ## 凭据与安全
 
@@ -111,6 +127,7 @@ pi install npm:@aaroncarry/pi-usage
 
 - `intervalMinutes`：后台刷新间隔（默认 5，最小 1）。
 - `status`：`active`（默认）/ `all` / `off`。
+- `autoDetect`：设为 `false` 关闭对未知厂商的余额端点自动探测。
 - `providers.<id>.enabled: false`：从状态行和卡片隐藏某账号。
 - `providers.<id>.label`：显示名覆盖。
 - `providers.<id>.region`：z.ai 区域 `auto`（默认）/`global`/`cn`。

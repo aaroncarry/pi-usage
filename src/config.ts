@@ -52,6 +52,11 @@ export interface BalanceConfig {
 	intervalMinutes?: number;
 	/** Footer status line: active account + session consumption (default), all accounts, or off. */
 	status?: StatusMode;
+	/**
+	 * Auto-detect balance endpoints for providers without a built-in adapter
+	 * (New API relays, Sub2API, MiniMax, Zhipu). Default true.
+	 */
+	autoDetect?: boolean;
 	/** Per-provider options; entries with `custom` define generic adapters. */
 	providers?: Record<string, ProviderConfig>;
 }
@@ -105,6 +110,7 @@ function sanitizeBalanceConfig(raw: Record<string, unknown>): BalanceConfig {
 	if (raw.status === "active" || raw.status === "all" || raw.status === "off") {
 		config.status = raw.status;
 	}
+	if (typeof raw.autoDetect === "boolean") config.autoDetect = raw.autoDetect;
 	if (isRecord(raw.providers)) {
 		const providers: Record<string, ProviderConfig> = {};
 		for (const [id, value] of Object.entries(raw.providers)) {

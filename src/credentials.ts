@@ -33,6 +33,20 @@ export interface StoredOAuthCredential {
 
 export type StoredCredential = StoredApiKeyCredential | StoredOAuthCredential;
 
+/** Every provider id that has a recognizable credential in auth.json. */
+export function readStoredCredentialIds(agentDir: string): string[] {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"));
+	} catch {
+		return [];
+	}
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+	return Object.entries(raw as Record<string, unknown>)
+		.filter(([, value]) => typeof value === "object" && value !== null && !Array.isArray(value))
+		.map(([id]) => id);
+}
+
 export function readStoredCredential(agentDir: string, providerId: string): StoredCredential | undefined {
 	let raw: unknown;
 	try {

@@ -5,10 +5,15 @@
  */
 
 import { intervalMs, type BalanceConfig, type ProviderConfig, loadBalanceConfig } from "./config.ts";
-import { readStoredCredential, resolveProviderToken, type ProviderAuthLookup } from "./credentials.ts";
+import {
+	readStoredCredential,
+	readStoredCredentialIds,
+	resolveProviderToken,
+} from "./credentials.ts";
 import { getBuiltinAdapters } from "./providers/index.ts";
+import { createAutoDetectAdapter } from "./providers/auto-detect.ts";
 import { createCustomAdapter } from "./providers/custom.ts";
-import type { AccountBalance, AuthResolver, FetchLike, ProviderAdapter } from "./types.ts";
+import type { AccountBalance, CredentialResolver, FetchLike, ProviderAdapter, ResolvedCredential } from "./types.ts";
 
 export interface BalanceServiceOptions {
 	agentDir: string;
@@ -18,11 +23,6 @@ export interface BalanceServiceOptions {
 	adapters?: ProviderAdapter[];
 }
 
-/**
- * Flatten an error chain into one actionable line. undici reports network
- * failures as bare "fetch failed" with the real reason (connect refused,
- * timeout, TLS) in `error.cause`, which must not be dropped.
- */
 function toErrorMessage(error: unknown): string {
 	if (!(error instanceof Error)) return String(error);
 	let message = error.message || error.name;
@@ -56,7 +56,8 @@ export class BalanceService {
 	private readonly agentDir: string;
 	private readonly fetchImpl: FetchLike;
 	private readonly adapters: Map<string, ProviderAdapter>;
-	private authResolver: AuthResolver | undefined;
+	private readonly autoAdapters = new Map<string, ProviderAdapter>();
+	private credentialResolver: CredentialResolver | undefined;
 	private readonly balances = new Map<string, AccountBalance>();
 	private readonly lastFetched = new Map<string, number>();
 	private readonly inflight = new Map<string, Promise<AccountBalance>>();
@@ -74,8 +75,8 @@ export class BalanceService {
 	}
 
 	/** Wire the live credential resolver (pi's modelRegistry-backed lookup). */
-	setAuthResolver(resolver: AuthResolver | undefined): void {
-		this.authResolver = resolver;
+	setCredentialResolver(resolver: CredentialResolver | undefined): void {
+		this.credentialResolver = resolver;
 	}
 
 	/** Subscribe to cache changes (any fetch finishing). Returns unsubscribe. */
@@ -86,17 +87,29 @@ export class BalanceService {
 		};
 	}
 
-	/** Provider ids that should be displayed: built-ins with a stored credential plus custom entries. */
+	/**
+	 * Provider ids that should be displayed: built-in adapters with a stored
+	 * credential, every remaining auth.json credential when auto-detection is
+	 * on, and explicitly configured custom adapters.
+	 */
 	listConfiguredProviderIds(): string[] {
 		const ids: string[] = [];
 		const configured = this.config.providers ?? {};
+		const autoDetect = this.config.autoDetect !== false;
 		for (const id of this.adapters.keys()) {
 			if (configured[id]?.enabled === false) continue;
 			if (readStoredCredential(this.agentDir, id)) ids.push(id);
 		}
+		if (autoDetect) {
+			for (const id of readStoredCredentialIds(this.agentDir)) {
+				if (this.adapters.has(id) || ids.includes(id)) continue;
+				if (configured[id]?.enabled === false) continue;
+				ids.push(id);
+			}
+		}
 		for (const [id, entry] of Object.entries(configured)) {
 			if (entry.enabled === false) continue;
-			if (this.adapters.has(id) || !entry.custom?.url) continue;
+			if (this.adapters.has(id) || ids.includes(id) || !entry.custom?.url) continue;
 			ids.push(id);
 		}
 		return ids;
@@ -163,6 +176,14 @@ export class BalanceService {
 		if (entry?.custom?.url) {
 			return createCustomAdapter(providerId, entry.custom, entry.label ?? providerId);
 		}
+		if (this.config.autoDetect !== false) {
+			let adapter = this.autoAdapters.get(providerId);
+			if (!adapter) {
+				adapter = createAutoDetectAdapter(providerId);
+				this.autoAdapters.set(providerId, adapter);
+			}
+			return adapter;
+		}
 		return undefined;
 	}
 
@@ -195,12 +216,15 @@ export class BalanceService {
 		signal?: AbortSignal,
 	): Promise<AccountBalance> {
 		try {
-			// Custom providers authenticate via their configured headers; only
-			// resolve a token when a stored credential actually exists.
-			const stored = readStoredCredential(this.agentDir, providerId);
-			const token = stored ? await resolveProviderToken(providerId, this.registryLookup(), this.agentDir) : "";
+			const resolved = await this.resolveRunCredential(providerId);
 			const options: ProviderConfig = this.config.providers?.[providerId] ?? {};
-			return await adapter.fetch({ token, signal, fetchImpl: this.fetchImpl, options });
+			return await adapter.fetch({
+				token: resolved.token,
+				baseUrl: resolved.baseUrl,
+				signal,
+				fetchImpl: this.fetchImpl,
+				options,
+			});
 		} catch (error) {
 			return {
 				providerId,
@@ -213,10 +237,30 @@ export class BalanceService {
 		}
 	}
 
-	private registryLookup(): ProviderAuthLookup | undefined {
-		if (!this.authResolver) return undefined;
-		const resolver = this.authResolver;
-		return async (providerId) => ({ auth: { apiKey: await resolver(providerId) } });
+	/**
+	 * Token plus base URL for one fetch. Registry-backed resolution runs first
+	 * (it refreshes OAuth tokens); auth.json is the fallback. Custom providers
+	 * without a stored credential get an empty token — they authenticate via
+	 * their own configured headers.
+	 */
+	private async resolveRunCredential(providerId: string): Promise<ResolvedCredential> {
+		const stored = readStoredCredential(this.agentDir, providerId);
+		if (!stored) {
+			if (this.credentialResolver) {
+				return this.credentialResolver(providerId).catch(() => ({ token: "" }));
+			}
+			return { token: "" };
+		}
+		if (this.credentialResolver) {
+			try {
+				const resolved = await this.credentialResolver(providerId);
+				if (resolved.token) return resolved;
+			} catch {
+				// Registry lookup failed (unknown provider, refresh error); fall back.
+			}
+		}
+		const token = await resolveProviderToken(providerId, undefined, this.agentDir);
+		return { token };
 	}
 
 	private notifyListeners(): void {

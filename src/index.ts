@@ -14,7 +14,7 @@ import { sumSessionUsage, type SessionUsageTotals } from "./session-usage.ts";
 import { BalanceService } from "./service.ts";
 import { buildUsageCard, type UsageCardData } from "./ui/card.ts";
 import { formatStatusLine } from "./ui/statusline.ts";
-import type { AuthResolver } from "./types.ts";
+import type { CredentialResolver } from "./types.ts";
 
 const USAGE_ENTRY_TYPE = "usage-report";
 /** Bound /usage fetches so a hanging provider API cannot stall the command. */
@@ -41,11 +41,18 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 	});
 
-	function authResolverFor(ctx: ExtensionContext): AuthResolver {
+	/**
+	 * Registry-backed credential resolution: the token comes from
+	 * getProviderAuth (which refreshes OAuth tokens before expiry), the base
+	 * URL from the registered provider — the auto-detect adapter needs it to
+	 * probe relay billing endpoints. Throwing sends the caller to the
+	 * auth.json fallback.
+	 */
+	function credentialResolverFor(ctx: ExtensionContext): CredentialResolver {
 		return async (providerId) => {
-			const auth = await ctx.modelRegistry.getProviderAuth(providerId);
+			const baseUrl = ctx.modelRegistry.getProvider(providerId)?.baseUrl;
+			const auth = await ctx.modelRegistry.getProviderAuth(providerId).catch(() => undefined);
 			if (!auth) {
-				// Unknown to the registry: let the caller fall back to auth.json.
 				throw new Error(`Provider "${providerId}" not found in model registry`);
 			}
 			const headers: Record<string, string> = {};
@@ -54,7 +61,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const token = tokenFromRegistryAuth({ auth: { apiKey: auth.auth.apiKey, headers } });
 			if (!token) throw new Error(`No usable credential for "${providerId}"`);
-			return token;
+			return { token, baseUrl };
 		};
 	}
 
@@ -75,7 +82,7 @@ export default function (pi: ExtensionAPI) {
 		if (service) return service;
 		const agentDir = getAgentDir();
 		const next = new BalanceService({ agentDir, config: loadBalanceConfig(agentDir) });
-		next.setAuthResolver(authResolverFor(ctx));
+		next.setCredentialResolver(credentialResolverFor(ctx));
 		service = next;
 		return next;
 	}
@@ -129,7 +136,7 @@ export default function (pi: ExtensionAPI) {
 		statusOverride = undefined;
 		const agentDir = getAgentDir();
 		const next = new BalanceService({ agentDir, config: loadBalanceConfig(agentDir) });
-		next.setAuthResolver(authResolverFor(ctx));
+		next.setCredentialResolver(credentialResolverFor(ctx));
 		next.onChange(updateStatus);
 		service?.stop();
 		service = next;

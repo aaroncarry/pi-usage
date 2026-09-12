@@ -59,7 +59,24 @@ Accounts with a credential in pi's `auth.json` are detected automatically; nothi
 | `openrouter` | `GET openrouter.ai/api/v1/credits` (API key or OAuth token) | Prepaid credits balance |
 | `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` (CN region: `open.bigmodel.cn`); falls back to the bigmodel.cn balance endpoint when the key has no coding plan | 5h/weekly/MCP windows, or CNY balance |
 | `deepseek` | `GET api.deepseek.com/user/balance` | Account balance |
+| any other configured provider | **Auto-detection** (see below): probes New API (`/dashboard/billing/*`), Sub2API (`/usage`), MiniMax, and Zhipu relay billing protocols | Balance or plan window, depending on what the gateway exposes |
 | any custom provider | Config-driven generic adapter (see below) | Balance / windows |
+
+### Auto-detection for custom providers
+
+Providers registered in pi without a built-in adapter (e.g. relays set up via
+[pi-provider-hub](https://github.com/aaroncarry/pi-provider-hub) or `models.json`) are probed
+automatically using their registry base URL and the stored credential:
+
+- **New API** gateways: `dashboard/billing/subscription` + `dashboard/billing/usage` (plus
+  `/api/usage/token/` when available) → remaining USD balance, used/total note.
+- **Sub2API** gateways: `usage` → remaining balance.
+- Hostname-pinned protocols for `api.deepseek.com`, MiniMax hosts, and `open.bigmodel.cn` / `api.z.ai`.
+
+The winning protocol is pinned per session; if every candidate rejects the request
+(e.g. HTTP 404/401), the account shows a "no balance endpoint detected" error without
+re-probing on every refresh. Transient network errors are retried. Disable with
+`"autoDetect": false` in `usage.json` or `providers.<id>.enabled: false` per account.
 
 ## Credentials and security
 
@@ -109,6 +126,7 @@ Optional config file `<agentDir>/usage.json`:
 
 - `intervalMinutes`: background refresh interval (default 5, minimum 1).
 - `status`: `active` (default) | `all` | `off`.
+- `autoDetect`: set `false` to disable endpoint auto-detection for unknown providers.
 - `providers.<id>.enabled: false`: hide an account from the status line and card.
 - `providers.<id>.label`: display name override.
 - `providers.<id>.region`: z.ai region — `auto` (default) | `global` | `cn`.

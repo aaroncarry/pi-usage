@@ -9,6 +9,7 @@ import { zaiAdapter } from "../src/providers/zai.ts";
 import { anthropicAdapter } from "../src/providers/anthropic.ts";
 import { githubCopilotAdapter } from "../src/providers/github-copilot.ts";
 import { openrouterAdapter } from "../src/providers/openrouter.ts";
+import { createAutoDetectAdapter } from "../src/providers/auto-detect.ts";
 import { createCustomAdapter, dotPath } from "../src/providers/custom.ts";
 import { resolveConfigValue, resolveProviderToken } from "../src/credentials.ts";
 import type { FetchLike } from "../src/types.ts";
@@ -361,4 +362,54 @@ test("openrouter adapter computes balance from credits", async () => {
 	assert.equal(balance.balance?.amount, 12.5);
 	assert.equal(balance.balance?.currency, "USD");
 	assert.match(balance.balance?.note ?? "", /used \$7\.50 of \$20\.00/);
+});
+
+test("auto-detect adapter probes new-api billing endpoints", async () => {
+	const scripted = new ScriptedFetch([
+		{ prefix: "https://relay.example/v1/dashboard/billing/subscription", respond: () => jsonResponse({ hard_limit_usd: 50 }) },
+		{ prefix: "https://relay.example/v1/dashboard/billing/usage", respond: () => jsonResponse({ total_usage: 1250 }) },
+	]);
+	const adapter = createAutoDetectAdapter("lingsuan");
+	const balance = await adapter.fetch({
+		token: "sk",
+		baseUrl: "https://relay.example/v1",
+		fetchImpl: scripted.fetchImpl,
+		options: {},
+	});
+	assert.equal(balance.providerId, "lingsuan");
+	assert.equal(balance.balance?.amount, 37.5);
+	assert.equal(balance.balance?.currency, "USD");
+	assert.deepEqual(balance.notes, ["used $12.50 of $50.00"]);
+	// Pinned winner: second fetch re-queries only the new-api pair.
+	await adapter.fetch({ token: "sk", baseUrl: "https://relay.example/v1", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(scripted.calls.length, 6);
+});
+
+test("auto-detect adapter detects sub2api usage endpoints", async () => {
+	const scripted = new ScriptedFetch([
+		{ prefix: "https://s2a.example/usage", respond: () => jsonResponse({ quota: { limit: 100, used: 30 }, unit: "USD" }) },
+	]);
+	const adapter = createAutoDetectAdapter("s2a");
+	const balance = await adapter.fetch({ token: "sk", baseUrl: "https://s2a.example", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance?.amount, 70);
+	assert.equal(balance.balance?.currency, "USD");
+	assert.deepEqual(balance.notes, ["used 30 of 100"]);
+});
+
+test("auto-detect adapter pins exhaustion and skips repeated probing", async () => {
+	const scripted = new ScriptedFetch([
+		{ prefix: "https://relay.example/", respond: () => jsonResponse({ error: "not found" }, 404) },
+	]);
+	const adapter = createAutoDetectAdapter("relay");
+	await assert.rejects(
+		adapter.fetch({ token: "sk", baseUrl: "https://relay.example", fetchImpl: scripted.fetchImpl, options: {} }),
+		/no balance endpoint detected/,
+	);
+	await assert.rejects(
+		adapter.fetch({ token: "sk", baseUrl: "https://relay.example", fetchImpl: scripted.fetchImpl, options: {} }),
+		/no balance endpoint detected/,
+	);
+	// new-api probes 2 base variants (1 call each), sub2api the same: 4 total,
+	// and the second fetch reuses the pinned exhaustion without any calls.
+	assert.equal(scripted.calls.length, 4);
 });

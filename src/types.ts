@@ -57,6 +57,8 @@ export interface ProviderFetchArgs {
 	 * configured headers.
 	 */
 	token: string;
+	/** Provider base URL from pi's model registry, when known. */
+	baseUrl?: string;
 	signal?: AbortSignal;
 	fetchImpl: FetchLike;
 	/** Per-provider options from usage.json (`providers` section). */
@@ -71,5 +73,11 @@ export interface ProviderAdapter {
 	fetch(args: ProviderFetchArgs): Promise<AccountBalance>;
 }
 
-/** Resolves the live bearer token/API key for a provider id. */
-export type AuthResolver = (providerId: string) => Promise<string>;
+/** Live credential plus the provider base URL (for auto-detection). */
+export interface ResolvedCredential {
+	token: string;
+	baseUrl?: string;
+}
+
+/** Resolves the live bearer token/API key (and base URL) for a provider id. */
+export type CredentialResolver = (providerId: string) => Promise<ResolvedCredential>;
