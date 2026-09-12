@@ -8,10 +8,10 @@
 
 ## 效果
 
-footer 状态行（默认模式）跟随当前模型，显示其额度窗口和本次会话消耗：
+footer 状态行（默认模式）跟随当前模型，显示其额度窗口、本次会话消耗和 7 天迷你趋势：
 
 ```
-Codex 5h 13% · weekly 2% · session 10.0k tok $0.020
+Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
 ```
 
 `/usage` 向会话流打印一张卡片（自定义条目渲染——非弹窗、不抢焦点）：
@@ -26,13 +26,34 @@ Codex 5h 13% · weekly 2% · session 10.0k tok $0.020
    Balance ¥21.46  recharged ¥118.00 · spent ¥96.54
  ○ DeepSeek
    Balance ¥38.48
+ Last 30 days ────────────────────────────
+ tokens ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▆███ 66k
+   gpt-5.6-luna  █████████████████░░░ 70%  34k
+   gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
+
+`/usage trends` 打开交互式仪表盘（Charts / Heatmap / Table 三个视图），基于全部会话历史——盲文时间序列（按模型分组）、12 周活动热力图（含连续天数）、厂商→模型明细表（会话/消息/费用/tokens/缓存）：
+
+```
+ Usage trends      [Charts]  Heatmap  Table
+ Total 66k tok · $0.04 · peak 39k (9/13)
+   39k ┤                                      ⢸⡄
+       │                                      ⣿⠘⡄
+     0 └⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣸⣔⣱⠑⢼
+        08-28                  09-13
+ Provider / Model     Sessions  Msgs  Cost  Tokens  ↑In   ↓Out  Cache
+ ▾ openai-codex               -    16 $0.04    44k   39k   5.3k   150k
+    gpt-5.6-luna              1    14 $0.01    34k   29k   5.2k   140k
+```
+
+趋势数据聚合自 pi 的会话文件（`<agentDir>/sessions/**/*.jsonl`），带增量磁盘缓存；分叉会话副本自动去重。Token 口径 = input + output + cache 写入。
 
 ## 命令
 
 | 命令 | 作用 |
 |---|---|
-| `/usage` | 向会话流打印用量卡片。重复执行即刷新：5 分钟 TTL 内秒回，过期则重新拉取（15 秒超时）。卡片留存在会话里，`/reload`、恢复旧会话时自动重放 |
+| `/usage` | 向会话流打印用量卡片（余额 + 30 天摘要）。重复执行即刷新：5 分钟 TTL 内秒回，过期则重新拉取（15 秒超时）。卡片留存在会话里，`/reload`、恢复旧会话时自动重放 |
+| `/usage trends` | 打开交互式趋势仪表盘（Charts / Heatmap / Table；`m` 切指标，`←→` 切周期，`v` 切视图，`↑↓`+`enter` 展开表格） |
 | `/usage active\|all\|off` | 立即切换 footer 状态行模式，并持久化到 `usage.json`（输入时有补全） |
 | `pi --usage-status all` | 指定本次运行的 footer 模式（覆盖 `usage.json`，不写回文件） |
 
@@ -127,6 +148,7 @@ pi install npm:@aaroncarry/pi-usage
 
 - `intervalMinutes`：后台刷新间隔（默认 5，最小 1）。
 - `status`：`active`（默认）/ `all` / `off`。
+- `sparkline`：设为 `false` 移除 footer 状态行的 7 天迷你趋势。
 - `autoDetect`：设为 `false` 关闭对未知厂商的余额端点自动探测。
 - `providers.<id>.enabled: false`：从状态行和卡片隐藏某账号。
 - `providers.<id>.label`：显示名覆盖。

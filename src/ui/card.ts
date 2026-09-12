@@ -8,14 +8,28 @@
 
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import { formatBar, formatMoney, formatResetSuffix } from "../format.ts";
+import { formatTokens } from "../session-usage.ts";
+import { blockBars, renderModelBars } from "../trends/render.ts";
 import type { AccountBalance } from "../types.ts";
 import type { ThemeLike } from "./statusline.ts";
+
+/** 30-day usage summary embedded in the card (scheme 1). */
+export interface CardTrendsSummary {
+	/** Fresh tokens per day, oldest first; index 29 = `endsAt` day. Zeros for missing days. */
+	days: number[];
+	/** Day start (epoch ms) of the newest cell in `days`. */
+	endsAt: number;
+	total: number;
+	cost: number;
+	models: { label: string; tokens: number }[];
+}
 
 export interface UsageCardData {
 	balances: AccountBalance[];
 	activeProviderId?: string;
 	/** Epoch ms when the snapshot was taken. */
 	generatedAt: number;
+	trends?: CardTrendsSummary;
 }
 
 function displayTitle(balance: AccountBalance): string {
@@ -43,7 +57,30 @@ export function buildUsageCard(data: UsageCardData, theme: ThemeLike): Component
 			box.addChild(line);
 		}
 	}
+	if (data.trends && data.trends.days.some((value) => value > 0)) {
+		for (const child of renderTrendsSummary(data.trends, theme)) {
+			box.addChild(child);
+		}
+	}
 	return box;
+}
+
+function renderTrendsSummary(trends: CardTrendsSummary, theme: ThemeLike): Text[] {
+	const dayMs = 86_400_000;
+	const days = trends.days.map((value, index) => ({ dayStart: trends.endsAt - (29 - index) * dayMs, value }));
+	const { bars } = blockBars(days, 30, trends.endsAt + dayMs - 1);
+	const children: Text[] = [
+		new Text(theme.fg("dim", "── Last 30 days ────────────────────────────"), 0, 1),
+		new Text(
+			`  ${theme.fg("dim", "tokens")} ${theme.fg("accent", bars)} ${theme.fg("dim", `${formatTokens(trends.total)} · ${formatMoney({ amount: trends.cost, currency: "USD" })}`)}`,
+			0,
+			0,
+		),
+	];
+	for (const line of renderModelBars(trends.models, theme, 50)) {
+		children.push(new Text(line, 0, 0));
+	}
+	return children;
 }
 
 function orderActiveFirst(balances: AccountBalance[], activeProviderId?: string): AccountBalance[] {

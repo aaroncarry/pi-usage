@@ -6,13 +6,13 @@ A [pi](https://github.com/earendil-works/pi) extension that shows the balances a
 
 ## What you get
 
-The footer status line (default mode) follows the model you are using and shows its quota windows plus this session's consumption:
+The footer status line (default mode) follows the model you are using and shows its quota windows, this session's consumption, and a 7-day token sparkline:
 
 ```
-Codex 5h 13% · weekly 2% · session 10.0k tok $0.020
+Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
 ```
 
-`/usage` prints a card into the conversation (a custom entry — no popup, no focus steal):
+`/usage` prints a card into the conversation (a custom entry — no popup, no focus steal) with a 30-day usage summary at the bottom:
 
 ```
  Usage · 02:15
@@ -24,13 +24,35 @@ Codex 5h 13% · weekly 2% · session 10.0k tok $0.020
    Balance ¥21.46  recharged ¥118.00 · spent ¥96.54
  ○ DeepSeek
    Balance ¥38.48
+ Last 30 days ────────────────────────────
+ tokens ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▂▆███ 66k
+   gpt-5.6-luna  █████████████████░░░ 70%  34k
+   gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
+
+`/usage trends` opens an interactive dashboard (Charts / Heatmap / Table) over your full session history — braille time series with model grouping, a 12-week activity heatmap with streaks, and a provider→model table with sessions/messages/cost/tokens/cache breakdown:
+
+```
+ Usage trends      [Charts]  Heatmap  Table
+ Total 66k tok · $0.04 · peak 39k (9/13)
+   39k ┤                                      ⢸⡄
+       │                                      ⣿⠘⡄
+     0 └⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣸⣔⣱⠑⢼
+        08-28                  09-13
+ GLM  ████░░░░ 70%
+ Provider / Model     Sessions  Msgs  Cost  Tokens  ↑In   ↓Out  Cache
+ ▾ openai-codex               -    16 $0.04    44k   39k   5.3k   150k
+    gpt-5.6-luna              1    14 $0.01    34k   29k   5.2k   140k
+```
+
+Trends are aggregated from pi's session files (`<agentDir>/sessions/**/*.jsonl`) with an incremental disk cache; forked session copies are deduplicated. Token metric = input + output + cache write.
 
 ## Commands
 
 | Command | Effect |
 |---|---|
-| `/usage` | Print the usage card into the session. Re-running refreshes: served from cache within the 5-minute TTL, refetched afterwards (15 s timeout). Cards persist in the session and are re-rendered on `/reload` and session restore. |
+| `/usage` | Print the usage card (balances + 30-day summary) into the session. Re-running refreshes: served from cache within the 5-minute TTL, refetched afterwards (15 s timeout). Cards persist in the session and are re-rendered on `/reload` and session restore. |
+| `/usage trends` | Open the interactive trends dashboard (Charts / Heatmap / Table; `m` metric, `←→` period, `v` view, `↑↓`+`enter` table expand). |
 | `/usage active\|all\|off` | Switch the footer status line mode immediately and persist it to `usage.json` (tab-completed). |
 | `pi --usage-status all` | Set the footer mode for this run only (overrides `usage.json`, not written back). |
 
@@ -126,6 +148,7 @@ Optional config file `<agentDir>/usage.json`:
 
 - `intervalMinutes`: background refresh interval (default 5, minimum 1).
 - `status`: `active` (default) | `all` | `off`.
+- `sparkline`: set `false` to drop the 7-day sparkline from the footer status line.
 - `autoDetect`: set `false` to disable endpoint auto-detection for unknown providers.
 - `providers.<id>.enabled: false`: hide an account from the status line and card.
 - `providers.<id>.label`: display name override.

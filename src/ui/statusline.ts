@@ -13,7 +13,7 @@ import type { AccountBalance } from "../types.ts";
 
 /** Structural subset of pi's Theme used by the status line/panel. */
 export interface ThemeLike {
-	fg(color: "dim" | "muted" | "accent" | "success" | "warning" | "error", text: string): string;
+	fg(color: "dim" | "muted" | "accent" | "success" | "warning" | "error" | "text", text: string): string;
 	bold(text: string): string;
 	bg(color: "customMessageBg", text: string): string;
 }
@@ -58,6 +58,8 @@ export function formatStatusLine(options: {
 	activeProviderId?: string;
 	theme: ThemeLike;
 	consumption?: SessionUsageTotals;
+	/** Pre-rendered 7-day sparkline segment (scheme 4), appended last. */
+	sparkline?: string;
 }): string | undefined {
 	if (options.mode === "off") return undefined;
 	const ordered = orderActiveFirst(options.balances, options.activeProviderId);
@@ -72,6 +74,7 @@ export function formatStatusLine(options: {
 	});
 	const consumptionSegment = formatConsumptionSegment(options.consumption, options.theme);
 	if (consumptionSegment) segments.push(consumptionSegment);
+	if (options.sparkline) segments.push(options.theme.fg("dim", `7d ${options.sparkline}`));
 	if (segments.length === 0) return undefined;
 	return segments.join(options.theme.fg("dim", " · "));
 }

@@ -57,6 +57,8 @@ export interface BalanceConfig {
 	 * (New API relays, Sub2API, MiniMax, Zhipu). Default true.
 	 */
 	autoDetect?: boolean;
+	/** 7-day token sparkline in the footer status line. Default true. */
+	sparkline?: boolean;
 	/** Per-provider options; entries with `custom` define generic adapters. */
 	providers?: Record<string, ProviderConfig>;
 }
@@ -111,6 +113,7 @@ function sanitizeBalanceConfig(raw: Record<string, unknown>): BalanceConfig {
 		config.status = raw.status;
 	}
 	if (typeof raw.autoDetect === "boolean") config.autoDetect = raw.autoDetect;
+	if (typeof raw.sparkline === "boolean") config.sparkline = raw.sparkline;
 	if (isRecord(raw.providers)) {
 		const providers: Record<string, ProviderConfig> = {};
 		for (const [id, value] of Object.entries(raw.providers)) {

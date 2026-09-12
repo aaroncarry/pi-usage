@@ -10,15 +10,20 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { isRecord, loadBalanceConfig, saveStatusMode, type StatusMode } from "./config.ts";
 import { getAgentDir, tokenFromRegistryAuth } from "./credentials.ts";
-import { sumSessionUsage, type SessionUsageTotals } from "./session-usage.ts";
+import { sumSessionUsage, formatTokens, type SessionUsageTotals } from "./session-usage.ts";
+import { collectTrends, dailyTotals, distributionRows, type TrendsData } from "./trends/aggregate.ts";
+import { TrendsDashboard } from "./trends/dashboard.ts";
+import { sparklineString } from "./trends/render.ts";
 import { BalanceService } from "./service.ts";
-import { buildUsageCard, type UsageCardData } from "./ui/card.ts";
+import { buildUsageCard, type CardTrendsSummary, type UsageCardData } from "./ui/card.ts";
 import { formatStatusLine } from "./ui/statusline.ts";
 import type { CredentialResolver } from "./types.ts";
 
 const USAGE_ENTRY_TYPE = "usage-report";
 /** Bound /usage fetches so a hanging provider API cannot stall the command. */
 const USAGE_FETCH_TIMEOUT_MS = 15_000;
+/** Trends scans are cached in memory briefly so card/dashboard/sparkline share one scan. */
+const TRENDS_TTL_MS = 60_000;
 
 const STATUS_MODES = ["active", "all", "off"] as const;
 
@@ -31,6 +36,8 @@ export default function (pi: ExtensionAPI) {
 	let ui: ExtensionUIContext | undefined;
 	let activeProviderId: string | undefined;
 	let consumption: SessionUsageTotals | undefined;
+	let trendsCache: { data: TrendsData; at: number } | undefined;
+	let sparkline: string | undefined;
 	/** `/usage <mode>` override for this session; wins over flag and usage.json. */
 	let statusOverride: StatusMode | undefined;
 	/** `--usage-status` CLI flag; wins over usage.json. */
@@ -74,6 +81,7 @@ export default function (pi: ExtensionAPI) {
 			activeProviderId,
 			theme: ui.theme,
 			consumption,
+			sparkline,
 		});
 		ui.setStatus("usage", text);
 	}
@@ -96,29 +104,133 @@ export default function (pi: ExtensionAPI) {
 			activeProviderId: typeof entry.data.activeProviderId === "string" ? entry.data.activeProviderId : undefined,
 			generatedAt: typeof entry.data.generatedAt === "number" ? entry.data.generatedAt : Date.now(),
 		};
+		if (isRecord(entry.data.trends)) {
+			const raw = entry.data.trends;
+			const rawDays = raw.days;
+			const rawModels = raw.models;
+			if (
+				Array.isArray(rawDays) &&
+				typeof raw.endsAt === "number" &&
+				typeof raw.total === "number" &&
+				typeof raw.cost === "number" &&
+				Array.isArray(rawModels)
+			) {
+				data.trends = {
+					days: rawDays.filter((value): value is number => typeof value === "number"),
+					endsAt: raw.endsAt,
+					total: raw.total,
+					cost: raw.cost,
+					models: rawModels.filter(
+						(model): model is { label: string; tokens: number } =>
+							isRecord(model) && typeof model.label === "string" && typeof model.tokens === "number",
+					),
+				};
+			}
+		}
 		return buildUsageCard(data, theme);
 	});
 
+	/** Session trends with a small TTL so card, dashboard and sparkline share one scan. */
+	async function getTrends(signal?: AbortSignal): Promise<TrendsData> {
+		if (trendsCache && Date.now() - trendsCache.at < TRENDS_TTL_MS) return trendsCache.data;
+		const data = await collectTrends(getAgentDir(), { signal });
+		trendsCache = { data, at: Date.now() };
+		return data;
+	}
+
+	function costTotal(data: TrendsData, fromMs?: number): number {
+		return distributionRows(data, fromMs).reduce((total, row) => total + row.cost, 0);
+	}
+
+	/** 30-day summary embedded in the /usage card. */
+	async function cardTrendsSummary(): Promise<CardTrendsSummary | undefined> {
+		try {
+			const data = await getTrends();
+			const now = Date.now();
+			const from = now - 30 * 86_400_000;
+			const days = dailyTotals(data, "tokens", from);
+			const todayStart = new Date(now).setHours(0, 0, 0, 0);
+			const byDay = new Map(days.map((entry) => [entry.dayStart, entry.value]));
+			const aligned: number[] = [];
+			for (let index = 29; index >= 0; index--) {
+				aligned.push(byDay.get(todayStart - index * 86_400_000) ?? 0);
+			}
+			const models = distributionRows(data, from)
+				.filter((row) => row.model !== "summaries")
+				.slice(0, 3)
+				.map((row) => ({ label: row.model, tokens: row.tokens }));
+			return {
+				days: aligned,
+				endsAt: todayStart,
+				total: aligned.reduce((total, value) => total + value, 0),
+				cost: costTotal(data, from),
+				models,
+			};
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Refresh the 7-day status-line sparkline once trends data is available. */
+	function refreshSparkline(): void {
+		if (!service || service.config.sparkline === false) return;
+		void getTrends()
+			.then((data) => {
+				const now = Date.now();
+				const days = dailyTotals(data, "tokens", now - 7 * 86_400_000);
+				const todayStart = new Date(now).setHours(0, 0, 0, 0);
+				const byDay = new Map(days.map((entry) => [entry.dayStart, entry.value]));
+				const aligned: number[] = [];
+				for (let index = 6; index >= 0; index--) {
+					aligned.push(byDay.get(todayStart - index * 86_400_000) ?? 0);
+				}
+				sparkline = sparklineString(aligned);
+				updateStatus();
+			})
+			.catch(() => undefined);
+	}
+
+	/** Open the interactive trends dashboard. */
+	async function openTrendsDashboard(ctx: ExtensionContext): Promise<void> {
+		await ctx.ui.custom<undefined>((_tui, theme, _keybindings, done) => {
+			return new TrendsDashboard({ theme, done, data: getTrends() });
+		}, {
+			overlay: true,
+			overlayOptions: { width: "85%", maxHeight: "92%", anchor: "center" },
+		});
+	}
+
 	pi.registerCommand("usage", {
-		description: "Show usage card, or set the footer status line mode",
+		description: "Show usage card, open the trends dashboard, or set the footer status line mode",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-			const matches = STATUS_MODES.filter((mode) => mode.startsWith(prefix.toLowerCase()));
-			return matches.length > 0 ? matches.map((mode) => ({ value: mode, label: mode })) : null;
+			const options = [...STATUS_MODES, "trends"].filter((mode) => mode.startsWith(prefix.toLowerCase()));
+			return options.length > 0 ? options.map((mode) => ({ value: mode, label: mode })) : null;
 		},
 		handler: async (args, ctx) => {
 			const argument = args?.trim().toLowerCase();
 			if (!argument) {
 				const current = ensureService(ctx);
 				await current.refreshAll({ signal: AbortSignal.timeout(USAGE_FETCH_TIMEOUT_MS) });
+				const trends = await cardTrendsSummary();
 				pi.appendEntry(USAGE_ENTRY_TYPE, {
 					balances: current.getAll(),
 					activeProviderId,
 					generatedAt: Date.now(),
+					trends,
 				});
 				return;
 			}
+			if (argument === "trends") {
+				ensureService(ctx);
+				if (ctx.mode !== "tui") {
+					ctx.ui.notify("/usage trends requires interactive mode", "warning");
+					return;
+				}
+				await openTrendsDashboard(ctx);
+				return;
+			}
 			if (!isStatusMode(argument)) {
-				ctx.ui.notify(`/usage: unknown mode "${argument}" — use active, all, or off`, "warning");
+				ctx.ui.notify(`/usage: unknown argument "${argument}" — use trends, active, all, or off`, "warning");
 				return;
 			}
 			statusOverride = argument;
@@ -145,6 +257,7 @@ export default function (pi: ExtensionAPI) {
 		consumption = sumSessionUsage(ctx.sessionManager.getEntries());
 		next.start();
 		updateStatus();
+		refreshSparkline();
 	});
 
 	// Session tokens/cost are local data: refresh immediately after every turn
@@ -164,5 +277,6 @@ export default function (pi: ExtensionAPI) {
 		service = undefined;
 		ui = undefined;
 		consumption = undefined;
+		sparkline = undefined;
 	});
 }
