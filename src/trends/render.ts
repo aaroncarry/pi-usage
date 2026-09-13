@@ -361,9 +361,10 @@ export function renderTable(
 			accumulator.output += group.row.output;
 			accumulator.cacheRead += group.row.cacheRead;
 			accumulator.cacheWrite += group.row.cacheWrite;
+			accumulator.reasoning += group.row.reasoning;
 			return accumulator;
 		},
-		{ messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, provider: "", model: "", sessions: 0 },
+		{ messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, provider: "", model: "", sessions: 0 },
 	);
 	lines.push(theme.fg("dim", "─".repeat(Math.min(width, nameWidth + columns.reduce((total2, column) => total2 + column.width + 2, 0)))));
 	const totalSessionsValue = totalSessions !== undefined ? formatCount(totalSessions) : "-";

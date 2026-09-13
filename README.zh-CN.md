@@ -32,7 +32,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
    gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
 
-`/usage trends` 打开交互式仪表盘（Charts / Heatmap / Table 三个视图），基于全部会话历史——盲文时间序列（按模型分组）、12 周活动热力图（含连续天数）、厂商→模型明细表（会话/消息/费用/tokens/缓存）：
+仪表盘默认打开 **Table** 视图（厂商→模型明细直接列出）；`v` 循环切换 Table → Charts → Heatmap → **Insights**。Insights 是成本洞察：Where it went（top 模型占比、缓存覆盖率、思考 token 占比）+ Worth attention（疑似缓存未命中及代价、日消耗相对前 4 周的增速、单会话消费集中度）。
 
 ```
  Usage trends      [Charts]  Heatmap  Table
@@ -53,7 +53,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
 | 命令 | 作用 |
 |---|---|
 | `/usage` | 向会话流打印用量卡片（余额 + 30 天摘要）。重复执行即刷新：5 分钟 TTL 内秒回，过期则重新拉取（15 秒超时）。卡片留存在会话里，`/reload`、恢复旧会话时自动重放 |
-| `/usage trends` | 打开交互式趋势仪表盘（Charts / Heatmap / Table；`m` 切指标，`←→` 切周期，`v` 切视图，`↑↓`+`enter` 展开表格） |
+| `/usage trends` | 打开交互式趋势仪表盘（Table / Charts / Heatmap / Insights；`m` 切指标，`←→` 切周期，`v` 切视图，`↑↓`+`enter` 展开表格） |
 | `/usage active\|all\|off` | 立即切换 footer 状态行模式，并持久化到 `usage.json`（输入时有补全） |
 | `pi --usage-status all` | 指定本次运行的 footer 模式（覆盖 `usage.json`，不写回文件） |
 

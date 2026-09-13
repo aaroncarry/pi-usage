@@ -30,7 +30,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
    gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
 
-`/usage trends` opens an interactive dashboard (Charts / Heatmap / Table) over your full session history — braille time series with model grouping, a 12-week activity heatmap with streaks, and a provider→model table with sessions/messages/cost/tokens/cache breakdown:
+The dashboard opens on the **Table** view (provider→model line items); `v` cycles Table → Charts → Heatmap → Insights. **Insights** is a tmustier-style cost analysis: where the spend went (top model share, cache leverage, reasoning share) and worth-attention alarms (likely cache misses with their cost, daily burn vs the prior 4 weeks, single-session concentration).
 
 ```
  Usage trends      [Charts]  Heatmap  Table
@@ -52,7 +52,7 @@ Trends are aggregated from pi's session files (`<agentDir>/sessions/**/*.jsonl`)
 | Command | Effect |
 |---|---|
 | `/usage` | Print the usage card (balances + 30-day summary) into the session. Re-running refreshes: served from cache within the 5-minute TTL, refetched afterwards (15 s timeout). Cards persist in the session and are re-rendered on `/reload` and session restore. |
-| `/usage trends` | Open the interactive trends dashboard (Charts / Heatmap / Table; `m` metric, `←→` period, `v` view, `↑↓`+`enter` table expand). |
+| `/usage trends` | Open the interactive trends dashboard (Table / Charts / Heatmap / Insights; `m` metric, `←→` period, `v` view, `↑↓`+`enter` table expand). |
 | `/usage active\|all\|off` | Switch the footer status line mode immediately and persist it to `usage.json` (tab-completed). |
 | `pi --usage-status all` | Set the footer mode for this run only (overrides `usage.json`, not written back). |
 

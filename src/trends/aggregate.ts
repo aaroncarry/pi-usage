@@ -24,6 +24,12 @@ export interface TrendCell {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	/** Thinking tokens reported by the provider (assistant messages only). */
+	reasoning: number;
+	/** Likely cache misses detected on this bucket's assistant messages. */
+	missCount: number;
+	/** Cost of the cache-miss messages themselves. */
+	missCost: number;
 }
 
 export interface TrendsData {
@@ -35,6 +41,8 @@ export interface TrendsData {
 	sessions: Map<string, Set<string>>;
 	/** All session source ids that contributed at least one assistant message. */
 	totalSessions: Set<string>;
+	/** Session source id → non-auxiliary cost, for spend-concentration insights. */
+	sessionCost: Map<string, number>;
 	generatedAt: number;
 }
 
@@ -43,7 +51,7 @@ export const AUXILIARY_MODEL = "summaries";
 const AUXILIARY_KEY = `${AUXILIARY_PROVIDER}\u0000${AUXILIARY_MODEL}`;
 const EXCLUDED_PROVIDERS = new Set(["faux-provider", "fake-provider"]);
 const HOUR_MS = 3_600_000;
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 export const TREND_METRICS = ["tokens", "cost"] as const;
 export type TrendMetric = (typeof TREND_METRICS)[number];
@@ -61,7 +69,11 @@ interface UsageTuple {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	reasoning: number;
 }
+
+/** Cache-miss classification: 0 none, 1 session gap, 2 model switch, 3 mid-session. */
+type CacheMissKind = 0 | 1 | 2 | 3;
 
 function readUsage(usage: unknown): UsageTuple | undefined {
 	if (!isRecord(usage)) return undefined;
@@ -73,6 +85,7 @@ function readUsage(usage: unknown): UsageTuple | undefined {
 		output: toNumber(usage.output) ?? 0,
 		cacheRead: toNumber(usage.cacheRead) ?? 0,
 		cacheWrite: toNumber(usage.cacheWrite) ?? 0,
+		reasoning: toNumber(usage.reasoning) ?? 0,
 	};
 	const sum = tuple.input + tuple.output + tuple.cacheRead + tuple.cacheWrite;
 	if (sum === 0 && tuple.cost === 0) return undefined;
@@ -100,13 +113,18 @@ interface ParsedRecord {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	reasoning: number;
 	auxiliary: boolean;
+	miss: CacheMissKind;
 }
 
 async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 	const content = await readFile(path, "utf8");
 	const records: ParsedRecord[] = [];
 	let sourceId = path;
+	// Adjacency state for cache-miss detection (per file, file order).
+	let compactionPending = false;
+	let prevAssistant: { ctx: number; model: string; timestamp: number } | undefined;
 	for (const line of content.split("\n")) {
 		// Every counted entry carries a usage object; session headers only
 		// provide the source id used for cross-file fork deduplication.
@@ -126,13 +144,18 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 		let provider: string;
 		let model: string;
 		let timestamp: number;
+		let reasoning = 0;
 		let auxiliary: boolean;
+		let miss: CacheMissKind = 0;
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
 			usageTuple = readUsage(entry.usage);
 			provider = AUXILIARY_PROVIDER;
 			model = AUXILIARY_MODEL;
 			timestamp = toNumber(entry.timestamp) ?? 0;
 			auxiliary = true;
+			// The next assistant message starts a fresh context; never a miss.
+			compactionPending = true;
+			prevAssistant = undefined;
 		} else if (isRecord(entry.message)) {
 			const message = entry.message;
 			timestamp = toNumber(message.timestamp) ?? toNumber(entry.timestamp) ?? 0;
@@ -142,6 +165,24 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 				if (!provider || !model || EXCLUDED_PROVIDERS.has(provider)) continue;
 				usageTuple = readUsage(message.usage);
 				auxiliary = false;
+				const prev = prevAssistant;
+				const afterCompaction = compactionPending;
+				compactionPending = false;
+				if (usageTuple && prev && !afterCompaction) {
+					const prevCtx = prev.ctx;
+					if (prevCtx >= 20_000 && usageTuple.cacheRead < Math.min(5_000, 0.3 * prevCtx)) {
+						// Gap > 5 min: cache TTL expired; model change: different cache
+						// namespace; otherwise the cache was dropped mid-session.
+						miss = timestamp - prev.timestamp > 5 * 60_000 ? 1 : prev.model !== model ? 2 : 3;
+					}
+				}
+				if (usageTuple) {
+					prevAssistant = {
+						ctx: usageTuple.input + usageTuple.cacheRead + usageTuple.cacheWrite,
+						model,
+						timestamp,
+					};
+				}
 			} else if (message.role === "toolResult") {
 				usageTuple = readUsage(message.usage);
 				provider = AUXILIARY_PROVIDER;
@@ -150,6 +191,7 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 			} else {
 				continue;
 			}
+			reasoning = usageTuple ? toNumber((message.usage as Record<string, unknown> | undefined)?.reasoning) ?? 0 : 0;
 		} else {
 			continue;
 		}
@@ -164,7 +206,9 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 			output: usageTuple.output,
 			cacheRead: usageTuple.cacheRead,
 			cacheWrite: usageTuple.cacheWrite,
+			reasoning,
 			auxiliary,
+			miss,
 		});
 	}
 	return records;
@@ -195,6 +239,24 @@ interface CacheFileEntry {
 	records: ParsedRecord[];
 }
 
+/** Serialize a record into the cached tuple form (must match sanitizeRecords). */
+function toTuple(record: ParsedRecord): unknown[] {
+	return [
+		record.sourceId,
+		record.provider,
+		record.model,
+		record.timestamp,
+		record.cost,
+		record.input,
+		record.output,
+		record.cacheRead,
+		record.cacheWrite,
+		record.reasoning,
+		record.auxiliary,
+		record.miss,
+	];
+}
+
 interface TrendsCache {
 	version: number;
 	files: Record<string, CacheFileEntry>;
@@ -208,8 +270,10 @@ function isCachedEntryFresh(entry: unknown, size: number, mtimeMs: number): bool
 function sanitizeRecords(records: unknown[]): ParsedRecord[] {
 	const out: ParsedRecord[] = [];
 	for (const record of records) {
-		if (!Array.isArray(record) || record.length !== 10) return [];
-		const [sourceId, provider, model, timestamp, cost, input, output, cacheRead, cacheWrite, auxiliary] = record as [
+		if (!Array.isArray(record) || record.length !== 12) return [];
+		const [sourceId, provider, model, timestamp, cost, input, output, cacheRead, cacheWrite, reasoning, auxiliary, miss] = record as [
+			unknown,
+			unknown,
 			unknown,
 			unknown,
 			unknown,
@@ -227,7 +291,7 @@ function sanitizeRecords(records: unknown[]): ParsedRecord[] {
 			typeof model !== "string" ||
 			typeof timestamp !== "number" ||
 			typeof auxiliary !== "boolean" ||
-			[toNumber(cost), toNumber(input), toNumber(output), toNumber(cacheRead), toNumber(cacheWrite)].some(
+			[toNumber(cost), toNumber(input), toNumber(output), toNumber(cacheRead), toNumber(cacheWrite), toNumber(reasoning), toNumber(miss)].some(
 				(value) => value === undefined,
 			)
 		) {
@@ -243,7 +307,9 @@ function sanitizeRecords(records: unknown[]): ParsedRecord[] {
 			output: output as number,
 			cacheRead: cacheRead as number,
 			cacheWrite: cacheWrite as number,
+			reasoning: reasoning as number,
 			auxiliary,
+			miss: miss as CacheMissKind,
 		});
 	}
 	return out;
@@ -270,7 +336,10 @@ async function loadCache(cachePath: string): Promise<TrendsCache> {
 	}
 }
 
-async function saveCache(cachePath: string, cache: TrendsCache): Promise<void> {
+async function saveCache(
+	cachePath: string,
+	cache: { version: number; files: Record<string, { size: number; mtimeMs: number; records: unknown[] }> },
+): Promise<void> {
 	const payload = JSON.stringify(cache);
 	const tempPath = `${cachePath}.${process.pid}-${Date.now()}.tmp`;
 	try {
@@ -328,7 +397,13 @@ export async function collectTrends(
 	}
 	if (useCache && cacheDirty) {
 		options?.signal?.throwIfAborted();
-		await saveCache(cachePath, { version: CACHE_VERSION, files: nextFiles });
+		const serializable = Object.fromEntries(
+			Object.entries(nextFiles).map(([path, entry]) => [
+				path,
+				{ size: entry.size, mtimeMs: entry.mtimeMs, records: entry.records.map(toTuple) },
+			]),
+		);
+		await saveCache(cachePath, { version: CACHE_VERSION, files: serializable });
 	}
 
 	// Cross-file deduplication for forked session copies.
@@ -337,6 +412,7 @@ export async function collectTrends(
 	const keys = new Map<string, { provider: string; model: string }>();
 	const sessions = new Map<string, Set<string>>();
 	const totalSessions = new Set<string>();
+	const sessionCost = new Map<string, number>();
 	for (const record of allRecords) {
 		const fingerprintKey = record.auxiliary
 			? `aux:${record.sourceId}:${record.timestamp}:${fingerprint(record)}`
@@ -355,7 +431,7 @@ export async function collectTrends(
 		}
 		let cell = bucket.get(key);
 		if (!cell) {
-			cell = { messages: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+			cell = { messages: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, missCount: 0, missCost: 0 };
 			bucket.set(key, cell);
 			keys.set(key, { provider, model });
 		}
@@ -365,6 +441,11 @@ export async function collectTrends(
 		cell.output += record.output;
 		cell.cacheRead += record.cacheRead;
 		cell.cacheWrite += record.cacheWrite;
+		if (!record.auxiliary) cell.reasoning += record.reasoning;
+		if (record.miss !== 0) {
+			cell.missCount += 1;
+			cell.missCost += record.cost;
+		}
 		if (!record.auxiliary) {
 			let sessionSet = sessions.get(key);
 			if (!sessionSet) {
@@ -373,9 +454,10 @@ export async function collectTrends(
 			}
 			sessionSet.add(record.sourceId);
 			totalSessions.add(record.sourceId);
+			sessionCost.set(record.sourceId, (sessionCost.get(record.sourceId) ?? 0) + record.cost);
 		}
 	}
-	return { hourly, keys, sessions, totalSessions, generatedAt: Date.now() };
+	return { hourly, keys, sessions, totalSessions, sessionCost, generatedAt: Date.now() };
 }
 
 /** Inclusive lower bound (epoch ms) of a period; undefined = all time. */
@@ -434,6 +516,7 @@ export interface DistributionRow {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	reasoning: number;
 }
 
 export function distributionRows(data: TrendsData, fromMs: number | undefined): DistributionRow[] {
@@ -442,7 +525,7 @@ export function distributionRows(data: TrendsData, fromMs: number | undefined): 
 		let row = rows.get(key);
 		if (!row) {
 			const names = data.keys.get(key) ?? { provider: "unknown", model: "unknown" };
-			row = { provider: names.provider, model: names.model, sessions: 0, messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+			row = { provider: names.provider, model: names.model, sessions: 0, messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
 			rows.set(key, row);
 		}
 		row.messages += cell.messages;
@@ -451,6 +534,7 @@ export function distributionRows(data: TrendsData, fromMs: number | undefined): 
 		row.output += cell.output;
 		row.cacheRead += cell.cacheRead;
 		row.cacheWrite += cell.cacheWrite;
+		row.reasoning += cell.reasoning;
 		row.tokens += cellTokens(cell);
 	}
 	const result = [...rows.values()];
@@ -522,6 +606,38 @@ export function chartSeries(
 
 function sum(values: number[]): number {
 	return values.reduce((total, value) => total + value, 0);
+}
+
+/** Sum of every bucket in [fromMs, now] plus the distinct session count. */
+export function periodTotals(
+	data: TrendsData,
+	fromMs: number | undefined,
+): TrendCell & { sessions: number } {
+	const total: TrendCell = {
+		messages: 0,
+		cost: 0,
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		reasoning: 0,
+		missCount: 0,
+		missCost: 0,
+	};
+	const sessions = new Set<string>();
+	for (const { key, cell } of flattenHourly(data, fromMs)) {
+		total.messages += cell.messages;
+		total.cost += cell.cost;
+		total.input += cell.input;
+		total.output += cell.output;
+		total.cacheRead += cell.cacheRead;
+		total.cacheWrite += cell.cacheWrite;
+		total.reasoning += cell.reasoning;
+		total.missCount += cell.missCount;
+		total.missCost += cell.missCost;
+		for (const sourceId of data.sessions.get(key) ?? []) sessions.add(sourceId);
+	}
+	return { ...total, sessions: sessions.size };
 }
 
 /** Daily fresh-token (or cost) totals in [from, now], keyed by local day start. */

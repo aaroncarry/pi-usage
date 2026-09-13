@@ -10,6 +10,7 @@ import {
 	dailyTotals,
 	distributionRows,
 	chartSeries,
+	periodStart,
 	type DistributionRow,
 	type TrendMetric,
 	type TrendPeriod,
@@ -26,13 +27,14 @@ import {
 	tableFootnote,
 	type TableRowGroup,
 } from "./render.ts";
+import { buildInsights, type Insight } from "./insights.ts";
 import { formatTokens } from "../session-usage.ts";
 import type { ThemeLike } from "../ui/statusline.ts";
 
-const VIEWS = ["charts", "heatmap", "table"] as const;
+const VIEWS = ["table", "charts", "heatmap", "insights"] as const;
 type View = (typeof VIEWS)[number];
 
-const VIEW_LABELS: Record<View, string> = { charts: "Charts", heatmap: "Heatmap", table: "Table" };
+const VIEW_LABELS: Record<View, string> = { table: "Table", charts: "Charts", heatmap: "Heatmap", insights: "Insights" };
 
 export class TrendsDashboard implements Component {
 	private readonly theme: ThemeLike;
@@ -40,7 +42,7 @@ export class TrendsDashboard implements Component {
 	private data: TrendsData | undefined;
 	private error: string | undefined;
 	private readonly loadPromise: Promise<void>;
-	private view: View = "charts";
+	private view: View = "table";
 	private periodIndex = 1; // 30d
 	private metricIndex = 0; // tokens
 	private expanded = new Set<string>();
@@ -112,6 +114,7 @@ export class TrendsDashboard implements Component {
 		const lines: string[] = [this.header(width), this.periodHeader()];
 		if (this.view === "charts") lines.push(...this.renderCharts(period, metric, width));
 		else if (this.view === "heatmap") lines.push(...this.renderHeatmapView(metric));
+		else if (this.view === "insights") lines.push(...this.renderInsightsView(period));
 		else lines.push(...this.renderTableView(period, width));
 		lines.push("", ` ${theme.fg("dim", "m metric · ←→ period · v view · ↑↓/enter table · esc close")}`);
 		return lines;
@@ -226,6 +229,31 @@ export class TrendsDashboard implements Component {
 		return lines;
 	}
 
+	private renderInsightsView(period: TrendPeriod): string[] {
+		const theme = this.theme;
+		const insights = buildInsights(this.data!, periodStart(period));
+		const lines = [` ${theme.fg("accent", theme.bold("What's contributing to your cost?"))}  ${theme.fg("dim", period)}`];
+		const structure = insights.filter((insight) => insight.kind === "structure");
+		const alarms = insights.filter((insight) => insight.kind === "alarm");
+		const renderInsight = (insight: Insight): string[] => {
+			const out = [`   ${theme.fg("dim", insight.stat.padStart(6))}  ${insight.headline}`];
+			if (insight.advice) out.push(`          ${theme.fg("dim", insight.advice)}`);
+			return out;
+		};
+		if (structure.length > 0) {
+			lines.push(` ${theme.fg("dim", "Where it went")}`);
+			for (const insight of structure) lines.push(...renderInsight(insight));
+		}
+		if (alarms.length > 0) {
+			lines.push(` ${theme.fg("dim", "Worth attention")}`);
+			for (const insight of alarms) lines.push(...renderInsight(insight));
+		}
+		if (structure.length === 0 && alarms.length === 0) {
+			lines.push(` ${theme.fg("muted", "✓ no waste patterns flagged for this period")}`);
+		}
+		return lines;
+	}
+
 	private tableGroups(): TableRowGroup[] {
 		const data = this.data!;
 		const { fromMs } = this.range();
@@ -247,9 +275,10 @@ export class TrendsDashboard implements Component {
 					accumulator.output += child.output;
 					accumulator.cacheRead += child.cacheRead;
 					accumulator.cacheWrite += child.cacheWrite;
+					accumulator.reasoning += child.reasoning;
 					return accumulator;
 				},
-				{ provider, model: provider, sessions: 0, messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				{ provider, model: provider, sessions: 0, messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
 			);
 			aggregate.sessions = new Set(children.flatMap((child) => [...(data.sessions.get(`${child.provider}\u0000${child.model}`) ?? [])])).size;
 			children.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);

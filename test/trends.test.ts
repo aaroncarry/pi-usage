@@ -9,7 +9,9 @@ import {
 	dailyTotals,
 	distributionRows,
 	periodStart,
+	periodTotals,
 } from "../src/trends/aggregate.ts";
+import { buildInsights } from "../src/trends/insights.ts";
 import {
 	blockBars,
 	formatCost,
@@ -110,7 +112,12 @@ test("collectTrends parses, dedupes forks, and groups auxiliary usage", async ()
 	const data2 = await collectTrends(dir);
 	assert.equal(data2.keys.size, data.keys.size);
 	const cache = JSON.parse(readFileSync(join(dir, "usage-trends-cache.json"), "utf8"));
-	assert.equal(cache.version, 1);
+	assert.equal(cache.version, 2);
+	// Records must serialize as tuples (objects would never validate on load,
+	// silently disabling the cache).
+	const firstEntry = Object.values(cache.files)[0] as { records: unknown[] } | undefined;
+	const firstRecords = firstEntry?.records ?? [];
+	assert.ok(Array.isArray(firstRecords[0]), "cached records are tuples");
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -195,7 +202,7 @@ test("renderModelBars shows share and tokens", () => {
 });
 
 test("renderTable renders provider rows, expansion, and total", () => {
-	const row = { provider: "p", model: "m", sessions: 2, messages: 10, cost: 1.5, tokens: 1000, input: 600, output: 200, cacheRead: 150, cacheWrite: 50 };
+	const row = { provider: "p", model: "m", sessions: 2, messages: 10, cost: 1.5, tokens: 1000, input: 600, output: 200, cacheRead: 150, cacheWrite: 50, reasoning: 0 };
 	const groups = [{ provider: "p", row, children: [{ ...row, model: "m1" }, { ...row, model: "m2" }] }];
 	const collapsed = renderTable(groups, PLAIN_THEME, 100, new Set(), 0).join("\n");
 	assert.match(collapsed, /▸ p/);
@@ -212,12 +219,13 @@ test("renderBrailleChart uses the metric formatter for axis labels", () => {
 
 function trendsFixture(): import("../src/trends/aggregate.ts").TrendsData {
 	const hour = NOW - 2 * HOUR;
-	const cell = { messages: 2, cost: 0.5, input: 100, output: 50, cacheRead: 200, cacheWrite: 10 };
+	const cell = { messages: 2, cost: 0.5, input: 100, output: 50, cacheRead: 200, cacheWrite: 10, reasoning: 0, missCount: 0, missCost: 0 };
 	return {
 		hourly: new Map([[hour, new Map([["p\u0000m", cell]])]]),
 		keys: new Map([["p\u0000m", { provider: "p", model: "m" }]]),
 		sessions: new Map([["p\u0000m", new Set(["s1"])]]),
 		totalSessions: new Set(["s1"]),
+		sessionCost: new Map([["s1", 0.5]]),
 		generatedAt: NOW,
 	};
 }
@@ -228,14 +236,20 @@ test("TrendsDashboard renders views, switches them, and closes", async () => {
 	const loading = dashboard.render(90).join("\n");
 	assert.match(loading, /Scanning sessions/);
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	const charts = dashboard.render(90).join("\n");
-	assert.match(charts, /\[Charts\]/);
-	assert.match(charts, /\[30d\]/);
+	const table = dashboard.render(90).join("\n");
+	assert.match(table, /\[Table\]/, "table is the default view");
+	assert.match(table, /\[30d\]/);
+	assert.match(table, /Sessions/);
+	dashboard.handleInput("v");
+	assert.match(dashboard.render(90).join("\n"), /\[Charts\]/);
 	dashboard.handleInput("v");
 	assert.match(dashboard.render(90).join("\n"), /\[Heatmap\]/);
 	dashboard.handleInput("v");
+	const insights = dashboard.render(90).join("\n");
+	assert.match(insights, /\[Insights\]/);
+	assert.match(insights, /contributing to your cost/);
+	dashboard.handleInput("v");
 	assert.match(dashboard.render(90).join("\n"), /\[Table\]/);
-	assert.match(dashboard.render(90).join("\n"), /Sessions/);
 	dashboard.handleInput("\x1b[C"); // next period → 90d
 	assert.match(dashboard.render(90).join("\n"), /\[90d\]/);
 	dashboard.handleInput("\x1b");
@@ -272,4 +286,94 @@ test("formatStatusLine appends the 7-day sparkline segment", () => {
 		sparkline: "▁▃▁▅██▇ 1.2M",
 	});
 	assert.match(line ?? "", /7d ▁▃▁▅██▇ 1\.2M$/);
+});
+
+test("cache-miss detection classifies gap, model switch, and mid-session", async () => {
+	const dir = makeSessionsDir();
+	const base = NOW - 3 * HOUR;
+	const big = { input: 30_000, output: 10, cacheRead: 0, cacheWrite: 0 };
+	writeSession(dir, "a.jsonl", [
+		line({ type: "session", id: "s", version: 3 }),
+		assistantLine("p", "m1", base, big), // no previous message → no miss
+		assistantLine("p", "m1", base + 30_000, big), // 30s later, low cache read → mid-session
+		assistantLine("q", "m2", base + 60_000, big), // model switch
+		line({
+			type: "compaction",
+			id: "c",
+			parentId: "x",
+			timestamp: base + 90_000,
+			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+		}),
+		assistantLine("p", "m1", base + 120_000, big), // after compaction → protected
+		assistantLine("p", "m1", base + 600_000, big), // 8 min gap → TTL miss
+	]);
+	const data = await collectTrends(dir, { cache: false });
+	const totals = periodTotals(data, undefined);
+	assert.equal(totals.missCount, 3, "model switch, mid-session, and TTL gap flagged; compaction-adjacent exempt");
+});
+
+test("buildInsights surfaces spend share, cache leverage, misses, and concentration", () => {
+	const hour = NOW - 2 * HOUR;
+	const mkCell = (over: Partial<import("../src/trends/aggregate.ts").TrendCell>) => ({
+		messages: 1,
+		cost: 0,
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		reasoning: 0,
+		missCount: 0,
+		missCost: 0,
+		...over,
+	});
+	const data: import("../src/trends/aggregate.ts").TrendsData = {
+		hourly: new Map([
+			[hour, new Map([
+				["big\u0000m", mkCell({ cost: 0.9, input: 900, output: 10, reasoning: 5, missCount: 1, missCost: 0.5 })],
+				["small\u0000m", mkCell({ cost: 0.1, input: 10, output: 5 })],
+			])],
+		]),
+		keys: new Map([
+			["big\u0000m", { provider: "big", model: "m" }],
+			["small\u0000m", { provider: "small", model: "m" }],
+		]),
+		sessions: new Map(),
+		totalSessions: new Set(["s1"]),
+		sessionCost: new Map([["s1", 0.9], ["s2", 0.1]]),
+		generatedAt: NOW,
+	};
+	const insights = buildInsights(data, undefined);
+	const headlines = insights.map((insight) => insight.headline);
+	assert.ok(headlines.some((headline) => /drives 90% of your spend/.test(headline)), "top-model share");
+	assert.ok(insights.some((insight) => insight.headline === "of processed tokens came from cache reads" && insight.stat === "0%"), "cache leverage with low-coverage advice");
+	assert.ok(insights.some((insight) => insight.headline.includes("of output is reasoning")), "reasoning share");
+	assert.ok(insights.some((insight) => insight.kind === "alarm" && /cache miss/.test(insight.headline) && insight.stat === "$0.50"), "cache-miss alarm with miss cost");
+	assert.ok(insights.some((insight) => insight.kind === "alarm" && /single session/.test(insight.headline) && insight.stat === "90%"), "spend concentration");
+});
+
+test("buildInsights flags accelerated burn vs the prior 4 weeks", () => {
+	const day = 86_400_000;
+	const now = Date.now();
+	const today = new Date(now).setHours(0, 0, 0, 0);
+	const hourly = new Map<number, Map<string, import("../src/trends/aggregate.ts").TrendCell>>();
+	const cell = { messages: 1, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, missCount: 0, missCost: 0 };
+	for (let index = 40; index >= 8; index--) {
+		hourly.set(today - index * day, new Map([["p\u0000m", { ...cell, cost: 0.1 }]]));
+	}
+	for (let index = 3; index >= 0; index--) {
+		hourly.set(today - index * day, new Map([["p\u0000m", { ...cell, cost: 1.0 }]]));
+	}
+	const data: import("../src/trends/aggregate.ts").TrendsData = {
+		hourly,
+		keys: new Map([["p\u0000m", { provider: "p", model: "m" }]]),
+		sessions: new Map(),
+		totalSessions: new Set(["s"]),
+		sessionCost: new Map([["s", 4.4]]),
+		generatedAt: now,
+	};
+	const insights = buildInsights(data, undefined, now);
+	assert.ok(
+		insights.some((insight) => insight.kind === "alarm" && /daily burn vs the prior 4 weeks/.test(insight.headline)),
+		"10x burn is flagged",
+	);
 });
