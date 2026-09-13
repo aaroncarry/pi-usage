@@ -55,7 +55,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
  ● Total  ● gpt-5.6-luna  ● gpt-5.6-terra  ● deepseek-flash
  Models · 30d
    gpt-5.6-luna (openai-codex) █████████████████░░░ 52%  34k
-   gpt-5.6-terra (lingsuan)    █████░░░░░░░░░░░░░░░ 24%  16k
+   gpt-5.6-terra (relay)    █████░░░░░░░░░░░░░░░ 24%  16k
    deepseek-flash              ██░░░░░░░░░░░░░░░░░░  7%  4.5k
  m metric · ←→ period · v view · g group · esc close
 ```
@@ -83,7 +83,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
     gpt-5.6-terra             1     2 $0.02    10k   10k     53   9.7k
     gpt-5.6-luna              1    14 $0.01    34k   29k   5.2k   140k
  ▸ deepseek                   1     8 $0.003   4.5k   3.2k   1.2k    16k
- ▸ lingsuan                   1     4      -    17k   16k   1.1k    12k
+ ▸ relay                   1     4      -    17k   16k   1.1k    12k
  ─────────────────────────────────────────────────────────────────────
  Total                        4    28 $0.04    66k   58k   7.6k   177k
  Tokens = Input + Output + CacheWrite · ↑In = Input + CacheWrite
@@ -189,7 +189,7 @@ pi install npm:@aaroncarry/pi-usage
   "providers": {
     "zai": { "region": "cn", "label": "GLM" },
     "deepseek": { "enabled": false },
-    "lingsuan": {
+    "my-relay": {
       "label": "LingSuan",
       "custom": {
         "url": "https://relay.example/api/status",
