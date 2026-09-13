@@ -52,6 +52,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
 
 | 命令 | 作用 |
 |---|---|
+| `/trends` | 打开交互式趋势仪表盘（图表/热力图/明细表/洞察）。等价于 `/usage trends` |
 | `/usage` | 向会话流打印用量卡片（余额 + 30 天摘要）。重复执行即刷新：5 分钟 TTL 内秒回，过期则重新拉取（15 秒超时）。卡片留存在会话里，`/reload`、恢复旧会话时自动重放 |
 | `/usage trends` | 打开交互式趋势仪表盘（Table / Charts / Heatmap / Insights；`m` 切指标，`←→` 切周期，`v` 切视图，`↑↓`+`enter` 展开表格） |
 | `/usage active\|all\|off` | 立即切换 footer 状态行模式，并持久化到 `usage.json`（输入时有补全） |

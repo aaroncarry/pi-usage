@@ -80,6 +80,7 @@ function renderTrendsSummary(trends: CardTrendsSummary, theme: ThemeLike): Text[
 	for (const line of renderModelBars(trends.models.map((model) => ({ label: model.label, value: model.tokens })), theme, 50)) {
 		children.push(new Text(line, 0, 0));
 	}
+	children.push(new Text(theme.fg("dim", "/trends — full usage dashboard"), 0, 0));
 	return children;
 }
 

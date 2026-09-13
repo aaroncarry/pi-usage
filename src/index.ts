@@ -192,6 +192,11 @@ export default function (pi: ExtensionAPI) {
 
 	/** Open the interactive trends dashboard. */
 	async function openTrendsDashboard(ctx: ExtensionContext): Promise<void> {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("/trends requires interactive mode", "warning");
+			return;
+		}
+		ensureService(ctx);
 		await ctx.ui.custom<undefined>((_tui, theme, _keybindings, done) => {
 			return new TrendsDashboard({ theme, done, data: getTrends() });
 		}, {
@@ -227,11 +232,6 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			if (argument === "trends") {
-				ensureService(ctx);
-				if (ctx.mode !== "tui") {
-					ctx.ui.notify("/usage trends requires interactive mode", "warning");
-					return;
-				}
 				await openTrendsDashboard(ctx);
 				return;
 			}
@@ -243,6 +243,15 @@ export default function (pi: ExtensionAPI) {
 			saveStatusMode(getAgentDir(), argument);
 			updateStatus();
 			ctx.ui.notify(`Footer status line: ${argument} (saved to usage.json)`, "info");
+		},
+	});
+
+	// First-class command so new users discover the dashboard without knowing
+	// about the two-stage "/usage <space> trends" argument completion.
+	pi.registerCommand("trends", {
+		description: "Open the usage trends dashboard (charts, heatmap, table, insights)",
+		handler: async (_args, ctx) => {
+			await openTrendsDashboard(ctx);
 		},
 	});
 

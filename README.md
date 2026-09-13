@@ -51,6 +51,7 @@ Trends are aggregated from pi's session files (`<agentDir>/sessions/**/*.jsonl`)
 
 | Command | Effect |
 |---|---|
+| `/trends` | Open the interactive trends dashboard (charts, heatmap, table, insights). Same as `/usage trends`. |
 | `/usage` | Print the usage card (balances + 30-day summary) into the session. Re-running refreshes: served from cache within the 5-minute TTL, refetched afterwards (15 s timeout). Cards persist in the session and are re-rendered on `/reload` and session restore. |
 | `/usage trends` | Open the interactive trends dashboard (Table / Charts / Heatmap / Insights; `m` metric, `←→` period, `v` view, `↑↓`+`enter` table expand). |
 | `/usage active\|all\|off` | Switch the footer status line mode immediately and persist it to `usage.json` (tab-completed). |
