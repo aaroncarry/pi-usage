@@ -4,7 +4,7 @@
  * trends data; formulas are documented per insight.
  */
 
-import { dailyTotals, distributionRows, periodTotals, type TrendsData } from "./aggregate.ts";
+import { dailyTotals, distributionRows, periodTotals, projectDistributionRows, type TrendsData } from "./aggregate.ts";
 import { formatCost } from "./render.ts";
 
 export interface Insight {
@@ -25,6 +25,26 @@ export function buildInsights(data: TrendsData, fromMs: number | undefined, now 
 	const insights: Insight[] = [];
 
 	const allTokens = totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+
+	// Structure: the most expensive project (only when several exist).
+	const projectRows = projectDistributionRows(data, fromMs);
+	const projectCost = new Map<string, number>();
+	for (const row of projectRows) {
+		projectCost.set(row.project, (projectCost.get(row.project) ?? 0) + row.cost);
+	}
+	if (projectCost.size >= 2 && totals.cost > 0) {
+		const ranked = [...projectCost.entries()].sort((a, b) => b[1] - a[1]);
+		const topName = ranked[0]![0];
+		const topShare = ranked[0]![1] / totals.cost;
+		if (topShare >= 0.4) {
+			insights.push({
+				kind: "structure",
+				stat: `${Math.round(topShare * 100)}%`,
+				headline: `of spend comes from "${topName}"`,
+				advice: `top projects: ${ranked.slice(0, 3).map(([name, value]) => `${name} ${Math.round((value / totals.cost) * 100)}%`).join(" · ")}`,
+			});
+		}
+	}
 
 	// Structure: the model that dominates spend.
 	if (totals.cost > 0 && rows.length > 1) {

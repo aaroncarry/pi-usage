@@ -10,6 +10,7 @@ import {
 	distributionRows,
 	periodStart,
 	periodTotals,
+	projectDistributionRows,
 } from "../src/trends/aggregate.ts";
 import { buildInsights } from "../src/trends/insights.ts";
 import {
@@ -38,7 +39,13 @@ function line(json: unknown): string {
 	return JSON.stringify(json);
 }
 
-function assistantLine(provider: string, model: string, timestamp: number, tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
+function assistantLine(
+	provider: string,
+	model: string,
+	timestamp: number,
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; cost?: { total: number } },
+) {
+	const { cost, ...tokenFields } = tokens;
 	return line({
 		type: "message",
 		message: {
@@ -46,7 +53,11 @@ function assistantLine(provider: string, model: string, timestamp: number, token
 			provider,
 			model,
 			timestamp,
-			usage: { ...tokens, totalTokens: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite, cost: { total: 0.01 } },
+			usage: {
+				...tokenFields,
+				totalTokens: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite,
+				cost: cost ?? { total: 0.01 },
+			},
 		},
 	});
 }
@@ -66,7 +77,7 @@ test("collectTrends parses, dedupes forks, and groups auxiliary usage", async ()
 	const t1 = NOW - 2 * HOUR;
 	const tokens = { input: 100, output: 50, cacheRead: 200, cacheWrite: 10 };
 	writeSession(dir, "a.jsonl", [
-		line({ type: "session", id: "sess-a", version: 3 }),
+		line({ type: "session", id: "sess-a", version: 3, cwd: "C:\Fixtures\alpha" }),
 		assistantLine("openai-codex", "gpt-x", t1, tokens),
 		assistantLine("faux-provider", "fake", t1, tokens),
 		line({ type: "message", message: { role: "assistant", provider: "openai-codex", model: "zero", timestamp: t1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } } } }),
@@ -78,7 +89,7 @@ test("collectTrends parses, dedupes forks, and groups auxiliary usage", async ()
 	]);
 	// Forked copy: same source session id, same assistant record → deduped.
 	writeSession(dir, "b.jsonl", [
-		line({ type: "session", id: "sess-a", version: 3 }),
+		line({ type: "session", id: "sess-a", version: 3, cwd: "C:\Fixtures\alpha" }),
 		assistantLine("openai-codex", "gpt-x", t1, tokens),
 		assistantLine("openai-codex", "gpt-y", t1 + HOUR, tokens),
 	]);
@@ -112,12 +123,15 @@ test("collectTrends parses, dedupes forks, and groups auxiliary usage", async ()
 	const data2 = await collectTrends(dir);
 	assert.equal(data2.keys.size, data.keys.size);
 	const cache = JSON.parse(readFileSync(join(dir, "usage-trends-cache.json"), "utf8"));
-	assert.equal(cache.version, 2);
+	assert.equal(cache.version, 3);
 	// Records must serialize as tuples (objects would never validate on load,
 	// silently disabling the cache).
-	const firstEntry = Object.values(cache.files)[0] as { records: unknown[] } | undefined;
+	const firstEntry = Object.values(cache.files)[0] as
+		| { records: unknown[]; cwd?: string }
+		| undefined;
 	const firstRecords = firstEntry?.records ?? [];
 	assert.ok(Array.isArray(firstRecords[0]), "cached records are tuples");
+	assert.match(String(firstEntry?.cwd), /alpha$/, "cwd must survive the cache round-trip (project attribution)");
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -125,7 +139,7 @@ test("collectTrends parses, dedupes forks, and groups auxiliary usage", async ()
 test("chartSeries buckets hourly within 8 days and groups by model", async () => {
 	const dir = makeSessionsDir();
 	const t1 = NOW - 2 * HOUR;
-	writeSession(dir, "a.jsonl", [assistantLine("p", "m1", t1, { input: 10, output: 0, cacheRead: 0, cacheWrite: 0 }), assistantLine("p", "m2", t1, { input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })]);
+	writeSession(dir, "a.jsonl", [assistantLine("p", "m1", t1, { input: 10, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } }), assistantLine("p", "m2", t1, { input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })]);
 	const data = await collectTrends(dir, { cache: false });
 	const chart = chartSeries(data, { fromMs: NOW - 8 * 86_400_000, toMs: NOW, metric: "tokens", groupBy: "model" });
 	assert.equal(chart.bucketMs, HOUR);
@@ -226,6 +240,9 @@ function trendsFixture(): import("../src/trends/aggregate.ts").TrendsData {
 		sessions: new Map([["p\u0000m", new Set(["s1"])]]),
 		totalSessions: new Set(["s1"]),
 		sessionCost: new Map([["s1", 0.5]]),
+		hourlyProject: new Map(),
+		projectKeys: new Map(),
+		projectSessions: new Map(),
 		generatedAt: NOW,
 	};
 }
@@ -287,6 +304,31 @@ test("formatStatusLine appends the 7-day sparkline segment", () => {
 	assert.match(line ?? "", /7d ▁▃▁▅██▇ 1\.2M$/);
 });
 
+test("project aggregation groups sessions by session cwd", async () => {
+	const dir = makeSessionsDir();
+	const t1 = NOW - 2 * HOUR;
+	const header = (id: string, cwd: string) => line({ type: "session", id, version: 3, cwd });
+	writeSession(dir, "pi.jsonl", [header("sess-pi", "C:\\Code\\pi"), assistantLine("p", "m1", t1, { input: 10, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } })]);
+	writeSession(dir, "app.jsonl", [header("sess-app", "C:\\Code\\app"), assistantLine("p", "m2", t1, { input: 20, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.02 } })]);
+
+	const data = await collectTrends(dir, { cache: false });
+	const rows = projectDistributionRows(data, undefined);
+	assert.equal(rows.length, 2);
+	const pi = rows.find((row) => row.project === "pi")!;
+	const app = rows.find((row) => row.project === "app")!;
+	assert.equal(pi.tokens, 10);
+	assert.equal(app.tokens, 20);
+	assert.equal(pi.sessions, 1, "per-project session count from projectSessions");
+	assert.match(pi.model, /^p\/m1$/);
+
+	const insights = buildInsights(data, undefined);
+	assert.ok(
+		insights.some((insight) => insight.headline.includes('of spend comes from "app"') && insight.stat === "67%"),
+		"app project carries 2/3 of the spend",
+	);
+	rmSync(dir, { recursive: true, force: true });
+});
+
 test("cache-miss detection classifies gap, model switch, and mid-session", async () => {
 	const dir = makeSessionsDir();
 	const base = NOW - 3 * HOUR;
@@ -339,6 +381,9 @@ test("buildInsights surfaces spend share, cache leverage, misses, and concentrat
 		sessions: new Map(),
 		totalSessions: new Set(["s1"]),
 		sessionCost: new Map([["s1", 0.9], ["s2", 0.1]]),
+		hourlyProject: new Map(),
+		projectKeys: new Map(),
+		projectSessions: new Map(),
 		generatedAt: NOW,
 	};
 	const insights = buildInsights(data, undefined);
@@ -368,6 +413,9 @@ test("buildInsights flags accelerated burn vs the prior 4 weeks", () => {
 		sessions: new Map(),
 		totalSessions: new Set(["s"]),
 		sessionCost: new Map([["s", 4.4]]),
+		hourlyProject: new Map(),
+		projectKeys: new Map(),
+		projectSessions: new Map(),
 		generatedAt: now,
 	};
 	const insights = buildInsights(data, undefined, now);

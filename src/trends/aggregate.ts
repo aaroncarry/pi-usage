@@ -33,31 +33,47 @@ export interface TrendCell {
 }
 
 export interface TrendsData {
-	/** hourStart (epoch ms, UTC hour) → "provider\u0000model" → cell */
+	/** hourStart (epoch ms, UTC hour) → "provider${KEY_SEP}model" → cell */
 	hourly: Map<number, Map<string, TrendCell>>;
-	/** "provider\u0000model" → display names */
+	/** "provider${KEY_SEP}model" → display names */
 	keys: Map<string, { provider: string; model: string }>;
-	/** "provider\u0000model" → contributing session source ids */
+	/** "provider${KEY_SEP}model" → contributing session source ids */
 	sessions: Map<string, Set<string>>;
 	/** All session source ids that contributed at least one assistant message. */
 	totalSessions: Set<string>;
 	/** Session source id → non-auxiliary cost, for spend-concentration insights. */
 	sessionCost: Map<string, number>;
+	/** hourStart → "project${KEY_SEP}provider${KEY_SEP}model" → cell */
+	hourlyProject: Map<number, Map<string, TrendCell>>;
+	/** "project${KEY_SEP}provider${KEY_SEP}model" → names */
+	projectKeys: Map<string, { project: string; provider: string; model: string }>;
+	/** "project${KEY_SEP}provider${KEY_SEP}model" → contributing session source ids */
+	projectSessions: Map<string, Set<string>>;
 	generatedAt: number;
 }
 
+/** Zero-character join key for composite map keys (never appears in real names). */
+const KEY_SEP = String.fromCharCode(0);
+
 export const AUXILIARY_PROVIDER = "Tools";
 export const AUXILIARY_MODEL = "summaries";
-const AUXILIARY_KEY = `${AUXILIARY_PROVIDER}\u0000${AUXILIARY_MODEL}`;
+const AUXILIARY_KEY = `${AUXILIARY_PROVIDER}${KEY_SEP}${AUXILIARY_MODEL}`;
 const EXCLUDED_PROVIDERS = new Set(["faux-provider", "fake-provider"]);
 const HOUR_MS = 3_600_000;
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 export const TREND_METRICS = ["tokens", "cost"] as const;
 export type TrendMetric = (typeof TREND_METRICS)[number];
 
 export const TREND_PERIODS = ["7d", "30d", "90d", "all"] as const;
 export type TrendPeriod = (typeof TREND_PERIODS)[number];
+
+/** Short project label: last path segment of the session cwd. */
+export function projectLabel(cwd: string): string {
+	const trimmed = cwd.replace(/[\\/]+$/, "");
+	const segments = trimmed.split(/[\\/]/);
+	return segments[segments.length - 1] || "unknown";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,12 +132,14 @@ interface ParsedRecord {
 	reasoning: number;
 	auxiliary: boolean;
 	miss: CacheMissKind;
+	project: string;
 }
 
-async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
+async function parseSessionFile(path: string): Promise<{ records: ParsedRecord[]; cwd?: string }> {
 	const content = await readFile(path, "utf8");
 	const records: ParsedRecord[] = [];
 	let sourceId = path;
+	let cwd: string | undefined;
 	// Adjacency state for cache-miss detection (per file, file order).
 	let compactionPending = false;
 	let prevAssistant: { ctx: number; model: string; timestamp: number } | undefined;
@@ -136,8 +154,9 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 			continue;
 		}
 		if (!isRecord(entry)) continue;
-		if (entry.type === "session" && typeof entry.id === "string" && entry.id.trim() !== "") {
-			sourceId = entry.id;
+		if (entry.type === "session") {
+			if (typeof entry.id === "string" && entry.id.trim() !== "") sourceId = entry.id;
+			if (typeof entry.cwd === "string" && entry.cwd.trim() !== "") cwd = entry.cwd;
 			continue;
 		}
 		let usageTuple: UsageTuple | undefined;
@@ -209,9 +228,10 @@ async function parseSessionFile(path: string): Promise<ParsedRecord[]> {
 			reasoning,
 			auxiliary,
 			miss,
+			project: "unknown",
 		});
 	}
-	return records;
+	return { records, cwd };
 }
 
 async function collectSessionFiles(dir: string): Promise<string[]> {
@@ -236,6 +256,7 @@ async function collectSessionFiles(dir: string): Promise<string[]> {
 interface CacheFileEntry {
 	size: number;
 	mtimeMs: number;
+	cwd?: string;
 	records: ParsedRecord[];
 }
 
@@ -310,6 +331,7 @@ function sanitizeRecords(records: unknown[]): ParsedRecord[] {
 			reasoning: reasoning as number,
 			auxiliary,
 			miss: miss as CacheMissKind,
+			project: "unknown",
 		});
 	}
 	return out;
@@ -326,7 +348,7 @@ async function loadCache(cachePath: string): Promise<TrendsCache> {
 			if (!isRecord(entry) || typeof entry.size !== "number" || typeof entry.mtimeMs !== "number" || !Array.isArray(entry.records)) {
 				continue;
 			}
-			const records = sanitizeRecords(entry.records);
+			const records = sanitizeRecords(entry.records).map((record) => ({ ...record, project: projectLabel(typeof entry.cwd === 'string' ? entry.cwd : '') }));
 			if (records.length !== entry.records.length) continue;
 			files[path] = { size: entry.size, mtimeMs: entry.mtimeMs, records };
 		}
@@ -381,14 +403,18 @@ export async function collectTrends(
 			allRecords.push(...cached.records);
 			continue;
 		}
-		let records: ParsedRecord[] = [];
+		let parsed: { records: ParsedRecord[]; cwd?: string } = { records: [] };
 		try {
-			records = await parseSessionFile(path);
+			parsed = await parseSessionFile(path);
 		} catch {
 			continue;
 		}
-		nextFiles[path] = { size, mtimeMs, records };
-		allRecords.push(...records);
+		const project = parsed.cwd ? projectLabel(parsed.cwd) : "unknown";
+		for (const record of parsed.records) {
+			record.project = project;
+		}
+		nextFiles[path] = { size, mtimeMs, cwd: parsed.cwd, records: parsed.records };
+		allRecords.push(...parsed.records);
 		cacheDirty = true;
 	}
 	// Drop cache entries for files that disappeared.
@@ -400,7 +426,7 @@ export async function collectTrends(
 		const serializable = Object.fromEntries(
 			Object.entries(nextFiles).map(([path, entry]) => [
 				path,
-				{ size: entry.size, mtimeMs: entry.mtimeMs, records: entry.records.map(toTuple) },
+				{ size: entry.size, mtimeMs: entry.mtimeMs, cwd: entry.cwd, records: entry.records.map(toTuple) },
 			]),
 		);
 		await saveCache(cachePath, { version: CACHE_VERSION, files: serializable });
@@ -413,6 +439,9 @@ export async function collectTrends(
 	const sessions = new Map<string, Set<string>>();
 	const totalSessions = new Set<string>();
 	const sessionCost = new Map<string, number>();
+	const hourlyProject = new Map<number, Map<string, TrendCell>>();
+	const projectKeys = new Map<string, { project: string; provider: string; model: string }>();
+	const projectSessions = new Map<string, Set<string>>();
 	for (const record of allRecords) {
 		const fingerprintKey = record.auxiliary
 			? `aux:${record.sourceId}:${record.timestamp}:${fingerprint(record)}`
@@ -422,7 +451,7 @@ export async function collectTrends(
 
 		const provider = record.auxiliary ? AUXILIARY_PROVIDER : record.provider;
 		const model = record.auxiliary ? AUXILIARY_MODEL : record.model;
-		const key = `${provider}\u0000${model}`;
+		const key = `${provider}${KEY_SEP}${model}`;
 		const hourStart = Math.floor(record.timestamp / HOUR_MS) * HOUR_MS;
 		let bucket = hourly.get(hourStart);
 		if (!bucket) {
@@ -456,8 +485,48 @@ export async function collectTrends(
 			totalSessions.add(record.sourceId);
 			sessionCost.set(record.sourceId, (sessionCost.get(record.sourceId) ?? 0) + record.cost);
 		}
+
+		// Per-project aggregation (same rules, project-qualified keys).
+		const project = record.project || "unknown";
+		const pkey = `${project}${KEY_SEP}${provider}${KEY_SEP}${model}`;
+		let projectBucket = hourlyProject.get(hourStart);
+		if (!projectBucket) {
+			projectBucket = new Map();
+			hourlyProject.set(hourStart, projectBucket);
+		}
+		let projectCell = projectBucket.get(pkey);
+		if (!projectCell) {
+			projectCell = { messages: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, missCount: 0, missCost: 0 };
+			projectBucket.set(pkey, projectCell);
+			projectKeys.set(pkey, { project, provider, model });
+		}
+		if (!record.auxiliary) projectCell.messages += 1;
+		projectCell.cost += record.cost;
+		projectCell.input += record.input;
+		projectCell.output += record.output;
+		projectCell.cacheRead += record.cacheRead;
+		projectCell.cacheWrite += record.cacheWrite;
+		if (!record.auxiliary) {
+			projectCell.reasoning += record.reasoning;
+			let projectSessionSet = projectSessions.get(pkey);
+			if (!projectSessionSet) {
+				projectSessionSet = new Set();
+				projectSessions.set(pkey, projectSessionSet);
+			}
+			projectSessionSet.add(record.sourceId);
+					}
 	}
-	return { hourly, keys, sessions, totalSessions, sessionCost, generatedAt: Date.now() };
+	return {
+		hourly,
+		keys,
+		sessions,
+		totalSessions,
+		sessionCost,
+		hourlyProject,
+		projectKeys,
+		projectSessions,
+		generatedAt: Date.now(),
+	};
 }
 
 /** Inclusive lower bound (epoch ms) of a period; undefined = all time. */
@@ -504,6 +573,26 @@ function flattenHourly(data: TrendsData, fromMs?: number): FlatRow[] {
 	return all.slice(low);
 }
 
+const projectFlattenCache = new WeakMap<TrendsData, { hourStart: number; key: string; cell: TrendCell }[]>();
+
+function flattenHourlyProject(data: TrendsData, fromMs?: number): { hourStart: number; key: string; cell: TrendCell }[] {
+	let all = projectFlattenCache.get(data);
+	if (!all) {
+		all = [];
+		for (const [hourStart, bucket] of data.hourlyProject) {
+			for (const [key, cell] of bucket) {
+				all.push({ hourStart, key, cell });
+			}
+		}
+		all.sort((a, b) => a.hourStart - b.hourStart);
+		projectFlattenCache.set(data, all);
+	}
+	if (fromMs === undefined) return all;
+	let low = 0;
+	while (low < all.length && all[low]!.hourStart < fromMs) low += 1;
+	return all.slice(low);
+}
+
 /** Model/provider distribution rows sorted by cost then tokens, descending. */
 export interface DistributionRow {
 	provider: string;
@@ -539,9 +628,51 @@ export function distributionRows(data: TrendsData, fromMs: number | undefined): 
 	}
 	const result = [...rows.values()];
 	for (const row of result) {
-		row.sessions = data.sessions.get(`${row.provider}\u0000${row.model}`)?.size ?? 0;
+		row.sessions = data.sessions.get(`${row.provider}${KEY_SEP}${row.model}`)?.size ?? 0;
 	}
 	result.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens || a.provider.localeCompare(b.provider));
+	return result;
+}
+
+/** Project-level distribution rows (project -> model), sorted by cost desc. */
+export interface ProjectDistributionRow extends DistributionRow {
+	project: string;
+}
+
+export function projectDistributionRows(data: TrendsData, fromMs: number | undefined): ProjectDistributionRow[] {
+	const rows = new Map<string, ProjectDistributionRow>();
+	for (const { key, cell } of flattenHourlyProject(data, fromMs)) {
+		const names = data.projectKeys.get(key) ?? { project: "unknown", provider: "unknown", model: "unknown" };
+		const rowKey = `${names.project}${KEY_SEP}${names.provider}${KEY_SEP}${names.model}`;
+		let row = rows.get(rowKey);
+		if (!row) {
+			row = {
+				provider: names.provider,
+				model: `${names.provider}/${names.model}`,
+				project: names.project,
+				sessions: data.projectSessions.get(key)?.size ?? 0,
+				messages: 0,
+				cost: 0,
+				tokens: 0,
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				reasoning: 0,
+			};
+			rows.set(rowKey, row);
+		}
+		row.messages += cell.messages;
+		row.cost += cell.cost;
+		row.input += cell.input;
+		row.output += cell.output;
+		row.cacheRead += cell.cacheRead;
+		row.cacheWrite += cell.cacheWrite;
+		row.reasoning += cell.reasoning;
+		row.tokens += cellTokens(cell);
+	}
+	const result = [...rows.values()];
+	result.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens || a.project.localeCompare(b.project));
 	return result;
 }
 

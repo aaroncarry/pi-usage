@@ -11,7 +11,9 @@ import {
 	distributionRows,
 	chartSeries,
 	periodStart,
+	projectDistributionRows,
 	type DistributionRow,
+	type ProjectDistributionRow,
 	type TrendMetric,
 	type TrendPeriod,
 	type TrendsData,
@@ -47,6 +49,7 @@ export class TrendsDashboard implements Component {
 	private metricIndex = 0; // tokens
 	private expanded = new Set<string>();
 	private selected = 0;
+	private groupMode: "provider" | "project" = "provider";
 
 	constructor(deps: { theme: ThemeLike; done: (result: undefined) => void; data: Promise<TrendsData> }) {
 		this.theme = deps.theme;
@@ -81,6 +84,10 @@ export class TrendsDashboard implements Component {
 		}
 		if (data === "m" || data === "M") {
 			this.metricIndex = this.metricIndex === 0 ? 1 : 0;
+			return;
+		}
+		if (data === "g" || data === "G") {
+			this.groupMode = this.groupMode === "provider" ? "project" : "provider";
 			return;
 		}
 		if (this.view === "table") {
@@ -289,9 +296,44 @@ export class TrendsDashboard implements Component {
 		return groups;
 	}
 
+	private projectTableGroups(): TableRowGroup[] {
+		const data = this.data!;
+		const { fromMs } = this.range();
+		const rows = projectDistributionRows(data, fromMs);
+		const byProject = new Map<string, ProjectDistributionRow[]>();
+		for (const row of rows) {
+			const list = byProject.get(row.project) ?? [];
+			list.push(row);
+			byProject.set(row.project, list);
+		}
+		const groups: TableRowGroup[] = [];
+		for (const [project, children] of byProject) {
+			const aggregate = children.reduce(
+				(accumulator, child) => {
+					accumulator.messages += child.messages;
+					accumulator.cost += child.cost;
+					accumulator.tokens += child.tokens;
+					accumulator.input += child.input;
+					accumulator.output += child.output;
+					accumulator.cacheRead += child.cacheRead;
+					accumulator.cacheWrite += child.cacheWrite;
+					accumulator.reasoning += child.reasoning;
+					return accumulator;
+				},
+				{ provider: project, model: project, sessions: 0, messages: 0, cost: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, project },
+			);
+			aggregate.sessions = new Set(children.flatMap((child) => [...(data.projectSessions.get(`${child.project} ${child.provider} ${child.model}`) ?? [])])).size;
+			children.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);
+			groups.push({ provider: project, row: aggregate, children });
+		}
+		groups.sort((a, b) => b.row.cost - a.row.cost || b.row.tokens - a.row.tokens);
+		if (this.selected >= groups.length) this.selected = Math.max(0, groups.length - 1);
+		return groups;
+	}
+
 	private renderTableView(period: TrendPeriod, width: number): string[] {
 		const theme = this.theme;
-		const groups = this.tableGroups();
+		const groups = this.groupMode === "project" ? this.projectTableGroups() : this.tableGroups();
 		if (groups.length === 0) return [` ${theme.fg("muted", "No usage recorded in this period")}`];
 		// Total-row session count: union across models, not the (double-counting) sum.
 		const data = this.data!;
@@ -301,7 +343,7 @@ export class TrendsDashboard implements Component {
 		);
 		return [
 			...renderTable(groups, theme, width - 2, this.expanded, this.selected, sessionUnion.size),
-			` ${tableFootnote(theme)} ${theme.fg("dim", `· ${period}`)}`,
+			` ${tableFootnote(theme)} ${theme.fg("dim", `· ${period} · ${this.groupMode === "project" ? "by project" : "by provider"} · g switch`)}`,
 		];
 	}
 }
