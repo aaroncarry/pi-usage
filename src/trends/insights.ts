@@ -4,7 +4,14 @@
  * trends data; formulas are documented per insight.
  */
 
-import { dailyTotals, distributionRows, periodTotals, projectDistributionRows, type TrendsData } from "./aggregate.ts";
+import {
+	annotateModelLabels,
+	dailyTotals,
+	distributionRows,
+	periodTotals,
+	projectDistributionRows,
+	type TrendsData,
+} from "./aggregate.ts";
 import { formatCost } from "./render.ts";
 
 export interface Insight {
@@ -48,13 +55,13 @@ export function buildInsights(data: TrendsData, fromMs: number | undefined, now 
 
 	// Structure: the model that dominates spend.
 	if (totals.cost > 0 && rows.length > 1) {
-		const top = [...rows].sort((a, b) => b.cost - a.cost)[0]!;
+		const top = annotateModelLabels([...rows].sort((a, b) => b.cost - a.cost))[0]!;
 		const share = top.cost / totals.cost;
 		if (share >= 0.5) {
 			insights.push({
 				kind: "structure",
 				stat: formatCost(top.cost),
-				headline: `${top.model} drives ${Math.round(share * 100)}% of your spend`,
+				headline: `${top.label} drives ${Math.round(share * 100)}% of your spend`,
 				advice: "routing some traffic to a cheaper model is the biggest cost lever",
 			});
 		}

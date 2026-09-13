@@ -11,7 +11,13 @@ import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earend
 import { isRecord, loadBalanceConfig, saveStatusMode, type StatusMode } from "./config.ts";
 import { getAgentDir, tokenFromRegistryAuth } from "./credentials.ts";
 import { sumSessionUsage, formatTokens, type SessionUsageTotals } from "./session-usage.ts";
-import { collectTrends, dailyTotals, distributionRows, type TrendsData } from "./trends/aggregate.ts";
+import {
+	annotateModelLabels,
+	collectTrends,
+	dailyTotals,
+	distributionRows,
+	type TrendsData,
+} from "./trends/aggregate.ts";
 import { TrendsDashboard } from "./trends/dashboard.ts";
 import { sparklineString } from "./trends/render.ts";
 import { BalanceService } from "./service.ts";
@@ -155,10 +161,10 @@ export default function (pi: ExtensionAPI) {
 			for (let index = 29; index >= 0; index--) {
 				aligned.push(byDay.get(todayStart - index * 86_400_000) ?? 0);
 			}
-			const models = distributionRows(data, from)
+			const models = annotateModelLabels(distributionRows(data, from))
 				.filter((row) => row.model !== "summaries")
 				.slice(0, 3)
-				.map((row) => ({ label: row.model, tokens: row.tokens }));
+				.map((row) => ({ label: row.label, tokens: row.tokens }));
 			return {
 				days: aligned,
 				endsAt: todayStart,

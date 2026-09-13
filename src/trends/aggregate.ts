@@ -75,6 +75,21 @@ export function projectLabel(cwd: string): string {
 	return segments[segments.length - 1] || "unknown";
 }
 
+/**
+ * Display labels for model rows: bare model id unless the same id exists
+ * under multiple providers, then "model (provider)" to disambiguate.
+ */
+export function annotateModelLabels<T extends { provider: string; model: string }>(
+	rows: T[],
+): (T & { label: string })[] {
+	const counts = new Map<string, number>();
+	for (const row of rows) counts.set(row.model, (counts.get(row.model) ?? 0) + 1);
+	return rows.map((row) => ({
+		...row,
+		label: (counts.get(row.model) ?? 0) > 1 ? `${row.model} (${row.provider})` : row.model,
+	}));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -703,11 +718,25 @@ export function chartSeries(
 	const startMs = bucketMs === 86_400_000 ? dayStart(fromMs) : Math.floor(fromMs / bucketMs) * bucketMs;
 	const bucketCount = Math.max(1, Math.ceil((now - startMs) / bucketMs));
 
+	const flat = flattenHourly(data, fromMs);
+	const namesByKey = new Map<string, { provider: string; model: string }>();
+	const modelCounts = new Map<string, number>();
+	for (const { key } of flat) {
+		const names = data.keys.get(key) ?? { provider: "unknown", model: "unknown" };
+		namesByKey.set(key, names);
+		if (options.groupBy === "model") modelCounts.set(names.model, (modelCounts.get(names.model) ?? 0) + 1);
+	}
+	const groupLabel = (names: { provider: string; model: string }): string => {
+		if (options.groupBy === "total") return "total";
+		if (options.groupBy === "provider") return names.provider;
+		return (modelCounts.get(names.model) ?? 0) > 1 ? `${names.model} (${names.provider})` : names.model;
+	};
+
 	const buckets = new Map<string, number[]>();
 	const totals = new Array<number>(bucketCount).fill(0);
-	for (const { hourStart, key, cell } of flattenHourly(data, fromMs)) {
-		const names = data.keys.get(key) ?? { provider: "unknown", model: "unknown" };
-		const groupKey = options.groupBy === "total" ? "total" : options.groupBy === "provider" ? names.provider : names.model;
+	for (const { hourStart, key, cell } of flat) {
+		const names = namesByKey.get(key) ?? { provider: "unknown", model: "unknown" };
+		const groupKey = groupLabel(names);
 		const index = Math.min(bucketCount - 1, Math.floor((hourStart - startMs) / bucketMs));
 		if (index < 0) continue;
 		let series = buckets.get(groupKey);

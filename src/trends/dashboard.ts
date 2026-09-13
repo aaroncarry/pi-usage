@@ -12,6 +12,7 @@ import {
 	chartSeries,
 	periodStart,
 	projectDistributionRows,
+	annotateModelLabels,
 	type DistributionRow,
 	type ProjectDistributionRow,
 	type TrendMetric,
@@ -193,10 +194,10 @@ export class TrendsDashboard implements Component {
 			toMs,
 			formatValue,
 		);
-		const models = distributionRows(data, fromMs)
+		const models = annotateModelLabels(distributionRows(data, fromMs))
 			.filter((row) => row.model !== "summaries")
 			.slice(0, 5)
-			.map((row) => ({ label: row.model, value: metric === "cost" ? row.cost : row.tokens }));
+			.map((row) => ({ label: row.label, value: metric === "cost" ? row.cost : row.tokens }));
 		return [
 			` ${summaryParts.join(theme.fg("dim", " · "))}`,
 			"",

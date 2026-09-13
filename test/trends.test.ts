@@ -11,6 +11,7 @@ import {
 	periodStart,
 	periodTotals,
 	projectDistributionRows,
+	annotateModelLabels,
 } from "../src/trends/aggregate.ts";
 import { buildInsights } from "../src/trends/insights.ts";
 import {
@@ -423,4 +424,33 @@ test("buildInsights flags accelerated burn vs the prior 4 weeks", () => {
 		insights.some((insight) => insight.kind === "alarm" && /daily burn vs the prior 4 weeks/.test(insight.headline)),
 		"10x burn is flagged",
 	);
+});
+
+test("annotateModelLabels disambiguates same model across providers", () => {
+	const rows = [
+		{ provider: "openai-codex", model: "gpt-5.6-luna" },
+		{ provider: "lingsuan", model: "gpt-5.6-luna" },
+		{ provider: "deepseek", model: "deepseek-flash" },
+	];
+	const labeled = annotateModelLabels(rows);
+	assert.deepEqual(
+		labeled.map((row) => row.label),
+		["gpt-5.6-luna (openai-codex)", "gpt-5.6-luna (lingsuan)", "deepseek-flash"],
+	);
+});
+
+test("chartSeries keeps same-model series separate per provider", async () => {
+	const dir = makeSessionsDir();
+	const t1 = NOW - 2 * HOUR;
+	writeSession(dir, "a.jsonl", [assistantLine("codex", "luna", t1, { input: 10, output: 0, cacheRead: 0, cacheWrite: 0 })]);
+	writeSession(dir, "b.jsonl", [assistantLine("lingsuan", "luna", t1, { input: 20, output: 0, cacheRead: 0, cacheWrite: 0 })]);
+	const data = await collectTrends(dir, { cache: false });
+	const chart = chartSeries(data, { fromMs: NOW - 8 * 86_400_000, toMs: NOW, metric: "tokens", groupBy: "model" });
+	const lunaSeries = chart.series.filter((entry) => entry.label.startsWith("luna"));
+	assert.equal(lunaSeries.length, 2, "same model id stays split per provider");
+	assert.deepEqual(
+		lunaSeries.map((entry) => entry.label).sort(),
+		["luna (codex)", "luna (lingsuan)"],
+	);
+	rmSync(dir, { recursive: true, force: true });
 });
