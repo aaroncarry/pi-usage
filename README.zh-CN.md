@@ -32,22 +32,79 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
    gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
 
-仪表盘默认打开 **Charts** 视图（盲文时间序列）；`v` 循环切换 Charts → Heatmap → **Insights** → Table。Insights 是成本洞察：Where it went（top 模型占比、缓存覆盖率、思考 token 占比）+ Worth attention（疑似缓存未命中及代价、日消耗相对前 4 周的增速、单会话消费集中度）。
+仪表盘默认打开 **Charts** 视图（盲文时间序列）；`v` 循环 Charts → Heatmap → Insights → Table。四个视图各举一例：
+
+## 趋势仪表盘
+
+按键：`v` 切视图 · `←→` 切周期（7d / 30d / 90d / all）· `m` 切 tokens ↔ cost · `g` 切换按厂商 / 按项目分组（明细表）· `↑↓` + `enter` 展开厂商行（明细表）· `esc` 关闭。
+
+**Charts** —— 按模型分组的盲文时间序列 + 模型分布。同一模型 id 由不同厂商提供时保持独立并标注 `(厂商)`：
 
 ```
- Usage trends      [Charts]  Heatmap  Table
- Total 66k tok · $0.04 · peak 39k (9/13)
-   39k ┤                                      ⢸⡄
-       │                                      ⣿⠘⡄
-     0 └⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣸⣔⣱⠑⢼
-        08-28                  09-13
+ Usage trends   [Charts]  Heatmap  Insights  Table     7d  [30d]  90d  all
+ Total 66k tok · Cost $0.04 · Peak 39k (9/13) · Streak 2d
+   39k ┤                                              ⢸⡄
+       │                                              ⣿⠘⡄
+       │                                              ⡇⡇⢸
+       │                                             ⢸⠇⢣⡎
+   17k ┤                                             ⢸ ⢸⠃
+       │                                             ⡏ ⢸⡆
+       │                                             ⡇⢀⡇⢇
+     0 └⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣸⣔⣱⠑⢼
+        08-14                08-29                09-13
+ ● Total  ● gpt-5.6-luna  ● gpt-5.6-terra  ● deepseek-flash
+ Models · 30d
+   gpt-5.6-luna (openai-codex) █████████████████░░░ 52%  34k
+   gpt-5.6-terra (lingsuan)    █████░░░░░░░░░░░░░░░ 24%  16k
+   deepseek-flash              ██░░░░░░░░░░░░░░░░░░  7%  4.5k
+ m metric · ←→ period · v view · g group · esc close
+```
+
+**Heatmap** —— 12 周活动日历 + 连续天数：
+
+```
+ Activity · 12 weeks                Streak 2d
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  █  ░
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ▒  █
+  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░  ░
+ ░ none  ▒ light  ▓ mid  █ heavy
+ Peak 39k tokens on 9/13 · Total 66k
+```
+
+**Table** —— 厂商→模型明细条目；`enter` 展开某厂商的模型明细：
+
+```
  Provider / Model     Sessions  Msgs  Cost  Tokens  ↑In   ↓Out  Cache
- ▾ openai-codex               -    16 $0.04    44k   39k   5.3k   150k
+ ▾ openai-codex               2    16 $0.04    44k   39k   5.3k   150k
+    gpt-5.6-terra             1     2 $0.02    10k   10k     53   9.7k
     gpt-5.6-luna              1    14 $0.01    34k   29k   5.2k   140k
+ ▸ deepseek                   1     8 $0.003   4.5k   3.2k   1.2k    16k
+ ▸ lingsuan                   1     4      -    17k   16k   1.1k    12k
+ ─────────────────────────────────────────────────────────────────────
+ Total                        4    28 $0.04    66k   58k   7.6k   177k
+ Tokens = Input + Output + CacheWrite · ↑In = Input + CacheWrite
+```
+
+**Insights** —— 花费去向 + 值得注意的浪费模式：
+
+```
+ What's contributing to your cost?  30d
+ Where it went
+      $0.02  gpt-5.6-terra (openai-codex) drives 57% of your spend
+          ~ routing some traffic to a cheaper model is the biggest cost lever
+      73%  of processed tokens came from cache reads
+      48%  of output is reasoning (thinking) tokens
+          ~ lowering the thinking level on routine tasks cuts this hidden spend
+ Worth attention
+      $0.50   2 likely cache misses re-read the prompt at full price
+          ~ pauses over 5 minutes and mid-session model switches invalidate the prompt cache
 ```
 
 趋势数据聚合自 pi 的会话文件（`<agentDir>/sessions/**/*.jsonl`），带增量磁盘缓存；分叉会话副本自动去重。Token 口径 = input + output + cache 写入。
-
 ## 命令
 
 | 命令 | 作用 |
