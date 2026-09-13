@@ -203,8 +203,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
 		description: "Show usage card, open the trends dashboard, or set the footer status line mode",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-			const options = [...STATUS_MODES, "trends"].filter((mode) => mode.startsWith(prefix.toLowerCase()));
-			return options.length > 0 ? options.map((mode) => ({ value: mode, label: mode })) : null;
+			const options: AutocompleteItem[] = [
+				{ value: "trends", label: "trends", description: "Open the interactive trends dashboard" },
+				{ value: "active", label: "active", description: "Footer: current account + session usage (default)" },
+				{ value: "all", label: "all", description: "Footer: all accounts on one line" },
+				{ value: "off", label: "off", description: "Footer: hide the status line" },
+			];
+			const matches = options.filter((option) => option.value.startsWith(prefix.toLowerCase()));
+			return matches.length > 0 ? matches : null;
 		},
 		handler: async (args, ctx) => {
 			const argument = args?.trim().toLowerCase();
