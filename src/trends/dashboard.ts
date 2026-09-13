@@ -42,7 +42,7 @@ export class TrendsDashboard implements Component {
 	private data: TrendsData | undefined;
 	private error: string | undefined;
 	private readonly loadPromise: Promise<void>;
-	private view: View = "table";
+	private view: View = "charts";
 	private periodIndex = 1; // 30d
 	private metricIndex = 0; // tokens
 	private expanded = new Set<string>();

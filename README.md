@@ -30,7 +30,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
    gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
 
-The dashboard opens on the **Table** view (provider→model line items); `v` cycles Table → Charts → Heatmap → Insights. **Insights** is a tmustier-style cost analysis: where the spend went (top model share, cache leverage, reasoning share) and worth-attention alarms (likely cache misses with their cost, daily burn vs the prior 4 weeks, single-session concentration).
+The dashboard opens on the **Charts** view (braille time series); `v` cycles Charts → Heatmap → Insights → Table. **Insights** is a tmustier-style cost analysis: where the spend went (top model share, cache leverage, reasoning share) and worth-attention alarms (likely cache misses with their cost, daily burn vs the prior 4 weeks, single-session concentration).
 
 ```
  Usage trends      [Charts]  Heatmap  Table

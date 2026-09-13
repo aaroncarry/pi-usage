@@ -32,7 +32,7 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
    gpt-5.6-terra █████░░░░░░░░░░░░░░░ 21%  10k
 ```
 
-仪表盘默认打开 **Table** 视图（厂商→模型明细直接列出）；`v` 循环切换 Table → Charts → Heatmap → **Insights**。Insights 是成本洞察：Where it went（top 模型占比、缓存覆盖率、思考 token 占比）+ Worth attention（疑似缓存未命中及代价、日消耗相对前 4 周的增速、单会话消费集中度）。
+仪表盘默认打开 **Charts** 视图（盲文时间序列）；`v` 循环切换 Charts → Heatmap → **Insights** → Table。Insights 是成本洞察：Where it went（top 模型占比、缓存覆盖率、思考 token 占比）+ Worth attention（疑似缓存未命中及代价、日消耗相对前 4 周的增速、单会话消费集中度）。
 
 ```
  Usage trends      [Charts]  Heatmap  Table

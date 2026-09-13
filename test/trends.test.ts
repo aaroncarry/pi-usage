@@ -236,12 +236,9 @@ test("TrendsDashboard renders views, switches them, and closes", async () => {
 	const loading = dashboard.render(90).join("\n");
 	assert.match(loading, /Scanning sessions/);
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	const table = dashboard.render(90).join("\n");
-	assert.match(table, /\[Table\]/, "table is the default view");
-	assert.match(table, /\[30d\]/);
-	assert.match(table, /Sessions/);
-	dashboard.handleInput("v");
-	assert.match(dashboard.render(90).join("\n"), /\[Charts\]/);
+	const charts = dashboard.render(90).join("\n");
+	assert.match(charts, /\[Charts\]/, "charts is the default view");
+	assert.match(charts, /\[30d\]/);
 	dashboard.handleInput("v");
 	assert.match(dashboard.render(90).join("\n"), /\[Heatmap\]/);
 	dashboard.handleInput("v");
@@ -249,7 +246,9 @@ test("TrendsDashboard renders views, switches them, and closes", async () => {
 	assert.match(insights, /\[Insights\]/);
 	assert.match(insights, /contributing to your cost/);
 	dashboard.handleInput("v");
-	assert.match(dashboard.render(90).join("\n"), /\[Table\]/);
+	const table = dashboard.render(90).join("\n");
+	assert.match(table, /\[Table\]/);
+	assert.match(table, /Sessions/);
 	dashboard.handleInput("\x1b[C"); // next period → 90d
 	assert.match(dashboard.render(90).join("\n"), /\[90d\]/);
 	dashboard.handleInput("\x1b");
