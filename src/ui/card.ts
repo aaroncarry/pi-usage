@@ -99,7 +99,7 @@ function renderAccount(balance: AccountBalance, theme: ThemeLike): Text[] {
 		const color = window.usedPercent >= 90 ? "error" : window.usedPercent >= 70 ? "warning" : "accent";
 		const barLine =
 			`  ${theme.fg("dim", window.label.padEnd(8))}${theme.fg(color, formatBar(window.usedPercent))}` +
-			` ${String(Math.round(window.usedPercent)).padStart(3)}%${theme.fg("dim", formatResetSuffix(window.resetsAt))}`;
+			` ${String(Math.round(window.usedPercent)).padStart(3)}% used${theme.fg("dim", formatResetSuffix(window.resetsAt))}`;
 		children.push(new Text(barLine, 0, 0));
 	}
 	if (balance.balance) {

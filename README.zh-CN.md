@@ -11,7 +11,7 @@
 footer 状态行（默认模式）跟随当前模型，显示其额度窗口、本次会话消耗和 7 天迷你趋势：
 
 ```
-Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
+Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
 ```
 
 `/usage` 向会话流打印一张卡片（自定义条目渲染——非弹窗、不抢焦点）：
@@ -20,8 +20,8 @@ Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█�
  Usage · 02:15
 
  ● Codex (Plus)
-   5h      ░░░░░░░░░░   0% · resets in 4h 54m
-   weekly  ░░░░░░░░░░   2% · resets in 6d 17h
+   5h      ░░░░░░░░░░   0% used · resets in 4h 54m
+   weekly  ░░░░░░░░░░   2% used · resets in 6d 17h
  ○ GLM
    Balance ¥21.46  recharged ¥118.00 · spent ¥96.54
  ○ DeepSeek

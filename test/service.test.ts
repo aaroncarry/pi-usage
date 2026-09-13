@@ -195,9 +195,9 @@ test("formatStatusLine respects mode and active provider", () => {
 		},
 	];
 	const active = formatStatusLine({ balances, mode: "active", activeProviderId: "openai-codex", theme: THEME });
-	assert.equal(active, "Codex 5h 13%");
+	assert.equal(active, "Codex 5h 13% used");
 	const all = formatStatusLine({ balances, mode: "all", activeProviderId: "openai-codex", theme: THEME });
-	assert.match(all ?? "", /^Codex 5h 13%/, "active account comes first, unstyled");
+	assert.match(all ?? "", /^Codex 5h 13% used/, "active account comes first, unstyled");
 	assert.match(all ?? "", /\[dim\]DeepSeek ¥38\.48/);
 	assert.match(all ?? "", /\[error\]GLM !/);
 	assert.equal(formatStatusLine({ balances, mode: "off", theme: THEME }), undefined);
@@ -217,7 +217,7 @@ test("formatStatusLine active mode shows all windows of the active account", () 
 		}),
 	];
 	const line = formatStatusLine({ balances, mode: "active", activeProviderId: "openai-codex", theme: THEME });
-	assert.equal(line, "Codex 5h 13% · weekly 2%");
+	assert.equal(line, "Codex 5h 13% used · weekly 2% used");
 });
 
 test("usage card renders accounts, bars, and errors", async () => {
@@ -327,7 +327,7 @@ test("formatStatusLine appends the session consumption segment", () => {
 		theme: THEME,
 		consumption: { tokens: 87400, cost: 0 },
 	});
-	assert.match(noCost ?? "", /weekly 2%\[dim\] · \[dim\]session 87k tok$/);
+	assert.match(noCost ?? "", /weekly 2% used\[dim\] · \[dim\]session 87k tok$/);
 
 	const withCost = formatStatusLine({
 		balances,
@@ -345,7 +345,7 @@ test("formatStatusLine appends the session consumption segment", () => {
 		theme: THEME,
 		consumption: { tokens: 0, cost: 0 },
 	});
-	assert.equal(empty, "Codex 5h 13% · weekly 2%", "zero consumption shows no segment");
+	assert.equal(empty, "Codex 5h 13% used · weekly 2% used", "zero consumption shows no segment");
 
 	const plain = formatStatusLine({
 		balances,
@@ -353,7 +353,7 @@ test("formatStatusLine appends the session consumption segment", () => {
 		activeProviderId: "openai-codex",
 		theme: THEME,
 	});
-	assert.equal(plain, "Codex 5h 13% · weekly 2%", "missing consumption shows no segment");
+	assert.equal(plain, "Codex 5h 13% used · weekly 2% used", "missing consumption shows no segment");
 
 	const all = formatStatusLine({
 		balances: [

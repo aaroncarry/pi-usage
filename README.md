@@ -9,7 +9,7 @@ A [pi](https://github.com/earendil-works/pi) extension that shows the balances a
 The footer status line (default mode) follows the model you are using and shows its quota windows, this session's consumption, and a 7-day token sparkline:
 
 ```
-Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
+Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█▂ 66k
 ```
 
 `/usage` prints a card into the conversation (a custom entry — no popup, no focus steal) with a 30-day usage summary at the bottom:
@@ -18,8 +18,8 @@ Codex 5h 13% · weekly 2% · session 10.0k tok $0.020 · 7d ▁▁▁▁▁█�
  Usage · 02:15
 
  ● Codex (Plus)
-   5h      ░░░░░░░░░░   0% · resets in 4h 54m
-   weekly  ░░░░░░░░░░   2% · resets in 6d 17h
+   5h      ░░░░░░░░░░   0% used · resets in 4h 54m
+   weekly  ░░░░░░░░░░   2% used · resets in 6d 17h
  ○ GLM
    Balance ¥21.46  recharged ¥118.00 · spent ¥96.54
  ○ DeepSeek

@@ -33,7 +33,7 @@ export function accountSummary(balance: AccountBalance, options?: { allWindows?:
 	const parts: string[] = [];
 	const windows = options?.allWindows ? balance.windows : balance.windows.slice(0, 1);
 	for (const window of windows) {
-		parts.push(`${window.label} ${Math.round(window.usedPercent)}%`);
+		parts.push(`${window.label} ${Math.round(window.usedPercent)}% used`);
 	}
 	if (balance.balance) parts.push(formatMoney(balance.balance));
 	return parts.length > 0 ? `${balance.label} ${parts.join(" · ")}` : balance.label;
