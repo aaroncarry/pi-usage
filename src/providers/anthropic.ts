@@ -20,10 +20,14 @@ interface AnthropicUsageWindow {
 interface AnthropicUsageResponse {
 	five_hour?: unknown;
 	seven_day?: unknown;
+	seven_day_opus?: unknown;
+	seven_day_sonnet?: unknown;
+	seven_day_oauth_apps?: unknown;
 	extra_usage?: {
 		is_enabled?: unknown;
 		monthly_limit?: unknown;
 		used_credits?: unknown;
+		currency?: unknown;
 	} | null;
 }
 
@@ -32,7 +36,7 @@ function parseWindow(label: string, raw: unknown): UsageWindow | undefined {
 	const window = raw as AnthropicUsageWindow;
 	const usedPercent = toNumber(window.utilization);
 	if (usedPercent === undefined) return undefined;
-	return { label, usedPercent, resetsAt: parseTimestamp(window.resets_at) };
+	return { label, usedPercent: Math.max(0, Math.min(100, usedPercent)), resetsAt: parseTimestamp(window.resets_at) };
 }
 
 export const anthropicAdapter: ProviderAdapter = {
@@ -60,17 +64,37 @@ export const anthropicAdapter: ProviderAdapter = {
 		if (fiveHour) windows.push(fiveHour);
 		const sevenDay = parseWindow("weekly", usage.seven_day);
 		if (sevenDay) windows.push(sevenDay);
-		if (windows.length === 0) {
-			throw new Error("Claude usage API returned no usage windows");
-		}
+		// Team/Max responses may expose model-specific weekly buckets while the
+		// aggregate bucket is null or omitted. Keep every non-null bucket instead
+		// of treating that valid response as an API failure.
+		const opus = parseWindow("weekly-opus", usage.seven_day_opus);
+		if (opus) windows.push(opus);
+		const sonnet = parseWindow("weekly-sonnet", usage.seven_day_sonnet);
+		if (sonnet) windows.push(sonnet);
+		const oauthApps = parseWindow("weekly-oauth-apps", usage.seven_day_oauth_apps);
+		if (oauthApps) windows.push(oauthApps);
+
 		const notes: string[] = [];
 		const extra = usage.extra_usage;
 		const monthlyLimit = toNumber(extra?.monthly_limit);
 		const usedCredits = toNumber(extra?.used_credits);
-		if (extra?.is_enabled === true && monthlyLimit !== undefined) {
-			const used = usedCredits !== undefined ? ` ${usedCredits}` : "";
-			notes.push(`extra usage:${used} of ${monthlyLimit}`);
+		const extraEnabled = extra?.is_enabled === true;
+		const currency = typeof extra?.currency === "string" && extra.currency.trim() ? extra.currency : "USD";
+		let balance: AccountBalance["balance"];
+		if (extraEnabled && monthlyLimit !== undefined) {
+			// Anthropic reports extra_usage amounts in cents, not dollars.
+			const used = usedCredits ?? 0;
+			balance = {
+				amount: Math.max(0, monthlyLimit - used) / 100,
+				currency,
+				note: `extra usage: ${currency === "USD" ? "$" : ""}${(used / 100).toFixed(2)} of ${currency === "USD" ? "$" : ""}${(monthlyLimit / 100).toFixed(2)}`,
+			};
+		} else if (extraEnabled && usedCredits !== undefined) {
+			notes.push(`extra usage used ${currency === "USD" ? "$" : ""}${(usedCredits / 100).toFixed(2)}`);
 		}
-		return { providerId: "anthropic", label: "Claude", windows, notes, fetchedAt: Date.now() };
+		if (windows.length === 0 && !balance && notes.length === 0) {
+			throw new Error("Claude usage API returned no displayable usage data");
+		}
+		return { providerId: "anthropic", label: "Claude", ...(balance ? { balance } : {}), windows, notes, fetchedAt: Date.now() };
 	},
 };

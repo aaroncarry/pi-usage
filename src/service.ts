@@ -6,6 +6,8 @@
 
 import { intervalMs, type BalanceConfig, type ProviderConfig, loadBalanceConfig } from "./config.ts";
 import {
+	accountIdFromCredential,
+	accountIdFromToken,
 	readStoredCredential,
 	readStoredCredentialIds,
 	resolveProviderToken,
@@ -247,20 +249,31 @@ export class BalanceService {
 		const stored = readStoredCredential(this.agentDir, providerId);
 		if (!stored) {
 			if (this.credentialResolver) {
-				return this.credentialResolver(providerId).catch(() => ({ token: "" }));
+				return this.credentialResolver(providerId)
+					.then((resolved) => ({
+						...resolved,
+						accountId: resolved.accountId ?? accountIdFromToken(resolved.token),
+					}))
+					.catch(() => ({ token: "" }));
 			}
 			return { token: "" };
 		}
 		if (this.credentialResolver) {
 			try {
 				const resolved = await this.credentialResolver(providerId);
-				if (resolved.token) return resolved;
+				if (resolved.token) {
+					return {
+						...resolved,
+						accountId:
+							resolved.accountId ?? accountIdFromCredential(stored) ?? accountIdFromToken(resolved.token),
+					};
+				}
 			} catch {
 				// Registry lookup failed (unknown provider, refresh error); fall back.
 			}
 		}
 		const token = await resolveProviderToken(providerId, undefined, this.agentDir);
-		return { token };
+		return { token, accountId: accountIdFromCredential(stored) ?? accountIdFromToken(token) };
 	}
 
 	private notifyListeners(): void {

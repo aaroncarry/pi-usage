@@ -6,6 +6,14 @@
 [CodexBar](https://github.com/steipete/CodexBar)，凭据直接复用 pi 统一存储的
 `auth.json`，不读取任何第三方凭据文件。
 
+## 0.3.0
+
+- 新增 Kimi Coding、MiniMax（全球/CN）、Moonshot AI（全球/CN）、OpenCode Go、Vercel AI Gateway 适配器。
+- OpenRouter 改用 `/api/v1/key`，Workspace API key 读取 key 限额和 usage，不再把 `/credits` 错当账户钱包余额。
+- 修复 Claude extra usage：Anthropic 返回的是美分，并补充 Opus/Sonnet 等可选窗口。
+- 增强 Codex、GitHub Copilot、DeepSeek 响应解析。
+- 暂未实现 x.ai consumer billing、Fireworks 组织账单和 Baseten 组织账单。
+
 ## 效果
 
 footer 状态行（默认模式）跟随当前模型，显示其额度窗口、本次会话消耗和 7 天迷你趋势：
@@ -132,15 +140,20 @@ Codex 5h 13% used · weekly 2% used · session 10.0k tok $0.020 · 7d ▁▁▁�
 
 auth.json 里有凭据的自动识别，无需配置：
 
-| auth.json key | 查询接口 | 显示内容 |
+| `auth.json` key | 查询接口 | 显示内容 |
 |---|---|---|
-| `openai-codex` | `GET chatgpt.com/backend-api/wham/usage`（Bearer OAuth token） | 5h/周窗口、credits、月度花销上限 |
-| `anthropic` | `GET api.anthropic.com/api/oauth/usage`（Claude Code OAuth token，`anthropic-beta: oauth-2025-04-20`） | 5h/周窗口、extra usage |
-| `github-copilot` | `GET github.com/copilot_internal/user`（GitHub OAuth token，`token` scheme） | premium/chat 配额窗口、计划、重置日期 |
-| `openrouter` | `GET openrouter.ai/api/v1/credits`（API key 或 OAuth token） | 预付余额 |
-| `zai` | `GET api.z.ai/api/monitor/usage/quota/limit`（CN 区 `open.bigmodel.cn`），无 coding plan 时回退 bigmodel.cn 余额接口 | 5h/周/MCP 窗口或人民币余额 |
-| `deepseek` | `GET api.deepseek.com/user/balance` | 账户余额 |
-| 其他任意已配置厂商 | **自动探测**（见下）：依次尝试 New API（`/dashboard/billing/*`）、Sub2API（`/usage`）、MiniMax、智谱等中转计费协议 | 余额或计划窗口，取决于网关暴露的接口 |
+| `openai-codex` | `GET chatgpt.com/backend-api/wham/usage` | 5h/周/额外窗口、credits、花销控制 |
+| `anthropic` | `GET api.anthropic.com/api/oauth/usage` | Claude 5h/周/模型窗口和 extra usage 余额 |
+| `github-copilot` | `GET github.com/copilot_internal/user` | premium/chat 配额窗口、计划、重置日期 |
+| `kimi-coding` | `GET api.kimi.com/coding/v1/usages` | Coding Plan 配额窗口和 booster wallet |
+| `minimax` / `minimax-cn` | Token Plan 或账户余额接口 | 模型配额窗口或 USD/CNY 余额 |
+| `moonshotai` / `moonshotai-cn` | `GET api.moonshot.{ai,cn}/v1/users/me/balance` | USD/CNY 账户余额 |
+| `openrouter` | `GET openrouter.ai/api/v1/key` | API key 剩余额度和 usage 指标 |
+| `opencode-go` | `GET opencode.ai/zen/go/v1/usage` | rolling、周、月窗口 |
+| `vercel-ai-gateway` | `GET ai-gateway.vercel.sh/v1/credits` | 剩余 credits 和累计消费 |
+| `zai` | Z.AI 配额接口；无 coding plan 时回退 BigModel 余额接口 | 5h/周/MCP 窗口或人民币余额 |
+| `deepseek` | `GET api.deepseek.com/user/balance` | 多币种账户余额 |
+| 其他任意已配置厂商 | **自动探测**（见下） | 网关余额或计划窗口 |
 | 任意自定义 provider | 配置驱动的通用适配器（见下） | 余额 / 窗口 |
 
 ### 自定义厂商的自动探测
@@ -170,13 +183,21 @@ pi 里没有专用适配器的厂商（例如通过
 pi install npm:@aaroncarry/pi-usage
 ```
 
-或在 settings.json 的 `packages` 里手动添加，开发期也可以指向本地目录：
+也可以在 `settings.json` 的 `packages` 中手动添加。开发时若要直接加载当前本地仓库，请在仓库根目录执行：
+
+```sh
+pi install -l .
+```
+
+该命令会将本地包路径写入 `.pi/settings.json`。本仓库已经包含等效配置：
 
 ```json
 {
-  "packages": ["npm:@aaroncarry/pi-usage"]
+  "packages": [".."]
 }
 ```
+
+如果 Pi 询问是否信任项目，请允许，以便加载项目本地包。请先移除全局配置中的 `pi-usage` 条目，尤其是 `git:github.com/aaroncarry/pi-usage` 或 `npm:@aaroncarry/pi-usage`，避免旧版本与本地版本同时加载（例如：`pi remove git:github.com/aaroncarry/pi-usage`）。
 
 ## 配置
 
@@ -225,8 +246,10 @@ npm test
 
 ## 已知限制
 
-- Kimi Coding（`kimi-coding`）暂不支持：pi 存的是 `api.kimi.com/coding` 的 token，尚未验证到接受它的用量接口。
-- Claude、Copilot、OpenRouter 适配器的端点与响应结构照搬 CodexBar 的实现，尚未用真实账号验证过；欢迎带实际响应 payload 提 issue。
-- DeepSeek 的用量数据在平台网页 session 后面，API key 查不到，只显示余额。
+- Kimi Coding、MiniMax、Moonshot、OpenCode Go 和 Vercel AI Gateway 使用各自专用接口；额度和账户余额保持分开解析，但服务端字段仍可能变化。MiniMax 会按 provider id 或 `providers.<id>.region` 选择全球/CN 接口。
+- 暂不支持 x.ai consumer billing：pi 当前凭据注册表没有暴露其 OAuth 登录及 CLI proxy 身份流程，因此不会把 API key 或 prepaid 数值猜作订阅额度。
+- DeepSeek 可能返回多种货币余额；主余额显示第一条有效货币，其他货币会列在备注中。
+- Fireworks 和 Baseten 的组织级账单需要额外的账户发现及日期窗口处理，当前暂未加入。
+- Claude 的 OAuth 用量接口未公开，且只有订阅 OAuth token 可以访问；API key 模式无法读取订阅窗口。
 - 订阅账号（OAuth 登录）显示的 `$` 是 pi 按模型目录单价估算的理论费用，并非真实扣费；真实消耗以服务端额度窗口为准。
 - 状态行是 TUI 特性；`/usage` 卡片在任意模式下都会写入会话。

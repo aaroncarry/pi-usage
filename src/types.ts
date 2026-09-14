@@ -57,6 +57,8 @@ export interface ProviderFetchArgs {
 	 * configured headers.
 	 */
 	token: string;
+	/** Account/workspace id used by providers that scope OAuth requests. */
+	accountId?: string;
 	/** Provider base URL from pi's model registry, when known. */
 	baseUrl?: string;
 	signal?: AbortSignal;
@@ -76,6 +78,7 @@ export interface ProviderAdapter {
 /** Live credential plus the provider base URL (for auto-detection). */
 export interface ResolvedCredential {
 	token: string;
+	accountId?: string;
 	baseUrl?: string;
 }
 

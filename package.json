@@ -1,6 +1,6 @@
 {
 	"name": "@aaroncarry/pi-usage",
-	"version": "0.2.2",
+	"version": "0.3.0",
 	"description": "Usage and balance viewer for pi: subscription quota windows, prepaid balances, and session consumption in a footer status line and a /usage card",
 	"type": "module",
 	"license": "MIT",

@@ -4,6 +4,14 @@
 
 A [pi](https://github.com/earendil-works/pi) extension that shows the balances and usage windows of your subscription accounts — a footer status line for the account you are currently using, plus a `/usage` card with full details. Query methods adapted from [CodexBar](https://github.com/steipete/CodexBar); credentials come straight from pi's unified `auth.json`, nothing else is read.
 
+## 0.3.0
+
+- Added first-class usage adapters for Kimi Coding, MiniMax (Global/CN), Moonshot AI (Global/CN), OpenCode Go, and Vercel AI Gateway.
+- Switched OpenRouter to the `/api/v1/key` endpoint so Workspace keys report key limits and usage instead of misreading `/credits` as a wallet balance.
+- Improved Claude extra-usage accounting (Anthropic returns the amounts in cents) and optional Opus/Sonnet usage windows.
+- Added richer Codex, GitHub Copilot, and DeepSeek response handling.
+- x.ai consumer billing, Fireworks organization billing, and Baseten organization billing are not included yet.
+
 ## What you get
 
 The footer status line (default mode) follows the model you are using and shows its quota windows, this session's consumption, and a 7-day token sparkline:
@@ -131,15 +139,20 @@ Precedence: `/usage <mode>` (session) > `--usage-status` (this run) > `usage.jso
 
 Accounts with a credential in pi's `auth.json` are detected automatically; nothing to configure:
 
-| auth.json key | Query | Shows |
+| `auth.json` key | Query | Shows |
 |---|---|---|
-| `openai-codex` | `GET chatgpt.com/backend-api/wham/usage` (Bearer OAuth token) | 5h/weekly windows, credits, monthly spend cap |
-| `anthropic` | `GET api.anthropic.com/api/oauth/usage` (Claude Code OAuth token, `anthropic-beta: oauth-2025-04-20`) | 5h/weekly windows, extra usage |
-| `github-copilot` | `GET github.com/copilot_internal/user` (GitHub OAuth token, `token` scheme) | premium/chat quota windows, plan, reset date |
-| `openrouter` | `GET openrouter.ai/api/v1/credits` (API key or OAuth token) | Prepaid credits balance |
-| `zai` | `GET api.z.ai/api/monitor/usage/quota/limit` (CN region: `open.bigmodel.cn`); falls back to the bigmodel.cn balance endpoint when the key has no coding plan | 5h/weekly/MCP windows, or CNY balance |
-| `deepseek` | `GET api.deepseek.com/user/balance` | Account balance |
-| any other configured provider | **Auto-detection** (see below): probes New API (`/dashboard/billing/*`), Sub2API (`/usage`), MiniMax, and Zhipu relay billing protocols | Balance or plan window, depending on what the gateway exposes |
+| `openai-codex` | `GET chatgpt.com/backend-api/wham/usage` | 5h/weekly/additional windows, credits, spend controls |
+| `anthropic` | `GET api.anthropic.com/api/oauth/usage` | Claude 5h/weekly/model windows and extra-usage balance |
+| `github-copilot` | `GET github.com/copilot_internal/user` | premium/chat quota windows, plan, reset date |
+| `kimi-coding` | `GET api.kimi.com/coding/v1/usages` | Coding-plan quota windows and booster wallet |
+| `minimax` / `minimax-cn` | Token Plan or account balance endpoints | Model quota windows or USD/CNY balance |
+| `moonshotai` / `moonshotai-cn` | `GET api.moonshot.{ai,cn}/v1/users/me/balance` | USD/CNY account balance |
+| `openrouter` | `GET openrouter.ai/api/v1/key` | API-key limit remaining and usage metrics |
+| `opencode-go` | `GET opencode.ai/zen/go/v1/usage` | Rolling, weekly, and monthly windows |
+| `vercel-ai-gateway` | `GET ai-gateway.vercel.sh/v1/credits` | Remaining credits and lifetime spend |
+| `zai` | Z.AI quota endpoint; falls back to the BigModel balance endpoint | 5h/weekly/MCP windows or CNY balance |
+| `deepseek` | `GET api.deepseek.com/user/balance` | Multi-currency account balance |
+| any other configured provider | **Auto-detection** (see below) | Gateway balance or plan windows |
 | any custom provider | Config-driven generic adapter (see below) | Balance / windows |
 
 ### Auto-detection for custom providers
@@ -170,13 +183,21 @@ re-probing on every refresh. Transient network errors are retried. Disable with
 pi install npm:@aaroncarry/pi-usage
 ```
 
-Or add the package to `settings.json` manually, or point at a local checkout while developing:
+Or add the package to `settings.json` manually. To load this checkout directly while developing, run Pi from the repository root and add the project-local package with:
+
+```sh
+pi install -l .
+```
+
+This writes `.pi/settings.json` with the local package path. The repository includes the equivalent configuration:
 
 ```json
 {
-  "packages": ["npm:@aaroncarry/pi-usage"]
+  "packages": [".."]
 }
 ```
+
+If Pi asks whether to trust the project, approve it so project-local packages can load. Remove any global `pi-usage` entry first—especially `git:github.com/aaroncarry/pi-usage` or `npm:@aaroncarry/pi-usage`—to avoid loading an older copy alongside this checkout (for example: `pi remove git:github.com/aaroncarry/pi-usage`).
 
 ## Configuration
 
@@ -225,8 +246,10 @@ After changing the code, `/reload` inside pi picks it up (local checkouts are re
 
 ## Known limitations
 
-- Kimi Coding (`kimi-coding`) is not supported yet: pi stores a token for `api.kimi.com/coding`, and no usage endpoint accepting it has been verified.
-- The Claude, Copilot, and OpenRouter adapters mirror the endpoints and response shapes used by CodexBar; they have not been verified against live accounts yet. Issue reports with the actual response payload are welcome.
-- DeepSeek usage data lives behind the platform web session and cannot be queried with the API key; only the balance is shown.
+- Kimi Coding, MiniMax, Moonshot, OpenCode Go, and Vercel AI Gateway use provider-specific APIs; quota semantics are kept separate from account balances and may change with undocumented server fields. MiniMax selects global/CN endpoints from the provider id or `providers.<id>.region`.
+- x.ai consumer billing is not included: its OAuth login and CLI proxy identity flow are not exposed by pi's current credential registry, so the extension does not guess at API-key or prepaid-account values.
+- DeepSeek exposes multiple currency balances; the primary balance is shown in the first valid currency and additional currencies are listed in the notes.
+- Fireworks and Baseten organization billing are not included because their account-scoped billing APIs need extra account discovery and date-window handling.
+- Claude's OAuth usage endpoint is undocumented and only subscription OAuth tokens can access it; API-key mode cannot report subscription windows.
 - The `$` figure shown for subscription (OAuth) accounts is pi's list-price estimate, not an actual charge; real consumption is the server-side quota window.
 - The panel and status line are TUI features; the `/usage` card itself is written in every mode.

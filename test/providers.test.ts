@@ -8,7 +8,12 @@ import { deepseekAdapter } from "../src/providers/deepseek.ts";
 import { zaiAdapter } from "../src/providers/zai.ts";
 import { anthropicAdapter } from "../src/providers/anthropic.ts";
 import { githubCopilotAdapter } from "../src/providers/github-copilot.ts";
+import { kimiCodingAdapter } from "../src/providers/kimi-coding.ts";
+import { minimaxAdapter } from "../src/providers/minimax.ts";
+import { createMoonshotAdapter } from "../src/providers/moonshot.ts";
+import { opencodeZenAdapter } from "../src/providers/opencode-zen.ts";
 import { openrouterAdapter } from "../src/providers/openrouter.ts";
+import { vercelAIGatewayAdapter } from "../src/providers/vercel-ai-gateway.ts";
 import { createAutoDetectAdapter } from "../src/providers/auto-detect.ts";
 import { createCustomAdapter, dotPath } from "../src/providers/custom.ts";
 import { resolveConfigValue, resolveProviderToken } from "../src/credentials.ts";
@@ -80,6 +85,48 @@ test("codex adapter reports HTTP errors", async () => {
 		codexAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} }),
 		/401/,
 	);
+});
+
+test("codex adapter scopes enterprise OAuth requests and parses monthly spend control", async () => {
+	const accountId = "acct-enterprise";
+	const payload = Buffer.from(JSON.stringify({
+		"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+	})).toString("base64url");
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://chatgpt.com/backend-api/wham/usage",
+			respond: () =>
+				jsonResponse({
+					plan_type: "enterprise",
+					rate_limit: { primary_window: null, secondary_window: null },
+					spend_control: {
+						individual_limit: { limit: 150000, used: 138000, reset_at: 1789818363 },
+					},
+				}),
+		},
+	]);
+	const balance = await codexAdapter.fetch({ token: `header.${payload}.signature`, fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.plan, "Enterprise");
+	assert.deepEqual(balance.windows[0], {
+		label: "monthly",
+		usedPercent: 92,
+		resetsAt: 1789818363 * 1000,
+	});
+	const headers = scripted.calls[0]?.init?.headers as Record<string, string>;
+	assert.equal(headers["ChatGPT-Account-Id"], accountId);
+});
+
+test("codex adapter accepts workspace responses without personal rate windows", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://chatgpt.com/backend-api/wham/usage",
+			respond: () => jsonResponse({ plan_type: "enterprise", rate_limit: null, spend_control: { reached: false } }),
+		},
+	]);
+	const balance = await codexAdapter.fetch({ token: "opaque-token", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.error, undefined);
+	assert.equal(balance.plan, "Enterprise");
+	assert.deepEqual(balance.windows, []);
 });
 
 test("codex adapter surfaces credits and spend cap", async () => {
@@ -317,9 +364,30 @@ test("anthropic adapter parses Claude OAuth usage windows", async () => {
 	);
 	assert.equal(balance.windows[0]?.usedPercent, 42);
 	assert.equal(balance.windows[0]?.resetsAt, Date.parse("2026-09-13T12:00:00Z"));
-	assert.deepEqual(balance.notes, ["extra usage: 20 of 100"]);
+	assert.equal(balance.balance?.amount, 0.8);
+	assert.equal(balance.balance?.currency, "USD");
+	assert.match(balance.balance?.note ?? "", /extra usage: \$0\.20 of \$1\.00/);
 	const headers = scripted.calls[0]?.init?.headers as Record<string, string>;
 	assert.equal(headers["anthropic-beta"], "oauth-2025-04-20");
+});
+
+test("anthropic adapter accepts model-specific windows when aggregate windows are absent", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://api.anthropic.com/api/oauth/usage",
+			respond: () =>
+				jsonResponse({
+					five_hour: null,
+					seven_day: null,
+					seven_day_opus: { utilization: 12, resets_at: "2026-09-20T00:00:00Z" },
+					seven_day_sonnet: { utilization: 8, resets_at: "2026-09-20T00:00:00Z" },
+				}),
+		},
+	]);
+	const balance = await anthropicAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.deepEqual(balance.windows.map((window) => window.label), ["weekly-opus", "weekly-sonnet"]);
+	assert.equal(balance.windows[0]?.usedPercent, 12);
+	assert.equal(balance.error, undefined);
 });
 
 test("github-copilot adapter parses quota snapshots and skips placeholders", async () => {
@@ -351,17 +419,96 @@ test("github-copilot adapter parses quota snapshots and skips placeholders", asy
 	assert.match(headers.Authorization ?? "", /^token /, "GitHub expects the token scheme, not Bearer");
 });
 
-test("openrouter adapter computes balance from credits", async () => {
+test("kimi coding adapter parses quota counts and reset times", async () => {
+	const scripted = new ScriptedFetch([{ prefix: "https://api.kimi.com/coding/v1/usages", respond: () => jsonResponse({ usage: { limit: "100", remaining: "75", resetTime: "2026-09-20T00:00:00Z" } }) }]);
+	const balance = await kimiCodingAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.windows[0]?.usedPercent, 25);
+	assert.equal(balance.windows[0]?.detail, "75 of 100 left");
+	assert.equal(balance.windows[0]?.resetsAt, Date.parse("2026-09-20T00:00:00Z"));
+});
+
+test("minimax adapter distinguishes remaining token-plan quota", async () => {
+	const scripted = new ScriptedFetch([{ prefix: "https://api.minimax.io/v1/token_plan/remains", respond: () => jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "MiniMax-M2", current_interval_usage_count: 20, current_interval_total_count: 100, current_interval_remaining_percent: 80, current_interval_status: 1, start_time: 1_700_000_000_000, end_time: 1_700_018_000_000, current_weekly_usage_count: 50, current_weekly_total_count: 100, current_weekly_remaining_percent: 50, current_weekly_status: 1, weekly_start_time: 1_700_000_000_000, weekly_end_time: 1_700_604_800_000 }] }) }]);
+	const balance = await minimaxAdapter.fetch({ token: "token-plan", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.windows[0]?.usedPercent, 20);
+	assert.equal(balance.windows[0]?.detail, "80 of 100 left");
+	assert.equal(balance.windows[1]?.usedPercent, 50);
+});
+
+test("moonshot adapter parses account balance", async () => {
+	const scripted = new ScriptedFetch([{ prefix: "https://api.moonshot.ai/v1/users/me/balance", respond: () => jsonResponse({ code: 0, status: true, data: { available_balance: 12.5, cash_balance: 10 } }) }]);
+	const balance = await createMoonshotAdapter("moonshotai").fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance?.amount, 12.5);
+	assert.equal(balance.balance?.currency, "USD");
+});
+
+test("vercel AI gateway adapter parses credits", async () => {
+	const scripted = new ScriptedFetch([{ prefix: "https://ai-gateway.vercel.sh/v1/credits", respond: () => jsonResponse({ balance: "9.50", total_used: "2.25" }) }]);
+	const balance = await vercelAIGatewayAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance?.amount, 9.5);
+	assert.match(balance.balance?.note ?? "", /lifetime spend \$2\.25/);
+});
+
+test("opencode Go adapter parses rolling usage windows", async () => {
+	const scripted = new ScriptedFetch([{ prefix: "https://opencode.ai/zen/go/v1/usage", respond: () => jsonResponse({ usage: { rolling: { status: "ok", percent: 25 }, weekly: { status: "rate-limited", percent: 80, resetsAt: "2026-09-20T00:00:00Z" } } }) }]);
+	const balance = await opencodeZenAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.deepEqual(balance.windows.map((window) => window.label), ["rolling", "weekly"]);
+	assert.equal(balance.windows[1]?.resetsAt, Date.parse("2026-09-20T00:00:00Z"));
+});
+
+test("openrouter adapter reads the authenticated key limit", async () => {
 	const scripted = new ScriptedFetch([
 		{
-			prefix: "https://openrouter.ai/api/v1/credits",
-			respond: () => jsonResponse({ data: { total_credits: 20, total_usage: 7.5 } }),
+			prefix: "https://openrouter.ai/api/v1/key",
+			respond: () =>
+				jsonResponse({
+					data: {
+						limit: 100,
+						limit_remaining: 62.5,
+						usage_daily: 2.5,
+						usage: 37.5,
+					},
+				}),
 		},
 	]);
 	const balance = await openrouterAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
-	assert.equal(balance.balance?.amount, 12.5);
+	assert.equal(balance.balance?.amount, 62.5);
 	assert.equal(balance.balance?.currency, "USD");
-	assert.match(balance.balance?.note ?? "", /used \$7\.50 of \$20\.00/);
+	assert.match(balance.balance?.note ?? "", /key limit \$100\.00/);
+	assert.deepEqual(balance.notes, ["today $2.50", "all-time $37.50"]);
+	assert.equal(scripted.urls[0], "https://openrouter.ai/api/v1/key");
+});
+
+test("openrouter adapter reports usage without fabricating a workspace wallet", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://openrouter.ai/api/v1/key",
+			respond: () =>
+				jsonResponse({
+					data: {
+						limit: null,
+						limit_remaining: null,
+						usage: 89290.64,
+						usage_monthly: 6147.70,
+					},
+				}),
+		},
+	]);
+	const balance = await openrouterAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance, undefined);
+	assert.deepEqual(balance.notes, ["no per-key spend cap", "this month $6147.70", "all-time $89290.64"]);
+});
+
+test("openrouter adapter preserves a genuine zero key limit", async () => {
+	const scripted = new ScriptedFetch([
+		{
+			prefix: "https://openrouter.ai/api/v1/key",
+			respond: () => jsonResponse({ data: { limit: 0, limit_remaining: 0, usage: 0 } }),
+		},
+	]);
+	const balance = await openrouterAdapter.fetch({ token: "t", fetchImpl: scripted.fetchImpl, options: {} });
+	assert.equal(balance.balance?.amount, 0);
+	assert.match(balance.balance?.note ?? "", /key limit \$0\.00/);
 });
 
 test("auto-detect adapter probes new-api billing endpoints", async () => {

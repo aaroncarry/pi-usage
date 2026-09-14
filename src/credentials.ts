@@ -29,6 +29,10 @@ export interface StoredOAuthCredential {
 	access?: string;
 	refresh?: string;
 	expires?: number;
+	/** Optional workspace id persisted by newer OAuth clients. */
+	accountId?: string;
+	/** Optional ID token; useful when the access token is opaque. */
+	idToken?: string;
 }
 
 export type StoredCredential = StoredApiKeyCredential | StoredOAuthCredential;
@@ -72,6 +76,8 @@ export function readStoredCredential(agentDir: string, providerId: string): Stor
 			access: typeof record.access === "string" ? record.access : undefined,
 			refresh: typeof record.refresh === "string" ? record.refresh : undefined,
 			expires: typeof record.expires === "number" ? record.expires : undefined,
+			accountId: stringValue(record.account_id) ?? stringValue(record.accountId),
+			idToken: stringValue(record.id_token) ?? stringValue(record.idToken),
 		};
 	}
 	return undefined;
@@ -94,6 +100,41 @@ export function tokenFromRegistryAuth(auth: RegistryAuth | undefined): string | 
 		([name]) => name.toLowerCase() === "authorization",
 	)?.[1];
 	return typeof authorization === "string" ? BEARER_RE.exec(authorization)?.[1] : undefined;
+}
+
+/**
+ * Read the ChatGPT workspace id carried by Codex OAuth JWT claims. This is
+ * intentionally best-effort: API keys and opaque tokens remain valid tokens,
+ * they simply do not need the workspace header.
+ */
+export function accountIdFromToken(token: string | undefined): string | undefined {
+	if (!token) return undefined;
+	const parts = token.split(".");
+	if (parts.length !== 3) return undefined;
+	try {
+		const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+		const direct = stringValue(payload.chatgpt_account_id);
+		if (direct) return direct;
+		const auth = payload["https://api.openai.com/auth"];
+		if (typeof auth === "object" && auth !== null) {
+			const nested = stringValue((auth as Record<string, unknown>).chatgpt_account_id);
+			if (nested) return nested;
+		}
+		const organizations = payload.organizations;
+		if (Array.isArray(organizations)) {
+			const organization = organizations.find((value) => typeof value === "object" && value !== null);
+			if (organization) return stringValue((organization as Record<string, unknown>).id);
+		}
+	} catch {
+		// Malformed or non-JWT credentials are supported; there is no account id.
+	}
+	return undefined;
+}
+
+/** Resolve an account id from auth.json without exposing the credential shape to adapters. */
+export function accountIdFromCredential(credential: StoredCredential | undefined): string | undefined {
+	if (!credential || credential.type !== "oauth") return undefined;
+	return credential.accountId ?? accountIdFromToken(credential.idToken) ?? accountIdFromToken(credential.access);
 }
 
 /** OAuth tokens this close to expiry are considered stale in the auth.json fallback. */
@@ -205,6 +246,12 @@ function runCommand(command: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function stringValue(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed || undefined;
 }
 
 function readEnvRecord(value: unknown): Record<string, string> | undefined {

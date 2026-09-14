@@ -74,7 +74,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			const token = tokenFromRegistryAuth({ auth: { apiKey: auth.auth.apiKey, headers } });
 			if (!token) throw new Error(`No usable credential for "${providerId}"`);
-			return { token, baseUrl };
+			const accountId = Object.entries(headers).find(
+				([name, value]) => name.toLowerCase() === "chatgpt-account-id" && value.trim().length > 0,
+			)?.[1];
+			return { token, baseUrl, accountId };
 		};
 	}
 

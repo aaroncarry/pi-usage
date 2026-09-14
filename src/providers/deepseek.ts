@@ -43,23 +43,29 @@ export const deepseekAdapter: ProviderAdapter = {
 		if (!Array.isArray(parsed.balance_infos)) {
 			throw new Error("DeepSeek balance API returned no balance_infos");
 		}
-		const first = parsed.balance_infos.find((entry): entry is DeepseekBalanceInfo => typeof entry === "object" && entry !== null);
-		if (!first) {
-			throw new Error("DeepSeek balance API returned an empty balance_infos list");
-		}
-		const amount = parseAmount(first.total_balance);
-		if (amount === undefined) {
-			throw new Error("DeepSeek balance API returned no usable total_balance");
-		}
-		const currency = typeof first.currency === "string" && first.currency ? first.currency : "CNY";
+		const balances = parsed.balance_infos
+			.map((entry): { amount: number; currency: string; granted?: number } | undefined => {
+				if (typeof entry !== "object" || entry === null) return undefined;
+				const info = entry as DeepseekBalanceInfo;
+				const amount = parseAmount(info.total_balance);
+				if (amount === undefined) return undefined;
+				const currency = typeof info.currency === "string" && info.currency.trim() ? info.currency.trim().toUpperCase() : "CNY";
+				const granted = parseAmount(info.granted_balance);
+				return { amount, currency, granted };
+			})
+			.filter((entry): entry is { amount: number; currency: string; granted?: number } => entry !== undefined);
+		if (balances.length === 0) throw new Error("DeepSeek balance API returned no usable balances");
+		const first = balances[0]!;
 		const notes: string[] = [];
-		const granted = parseAmount(first.granted_balance);
-		if (granted !== undefined && granted > 0) notes.push(`granted ${currency} ${granted.toFixed(2)}`);
+		if (balances.length > 1) {
+			for (const entry of balances) notes.push(`${entry.currency} balance ${entry.amount.toFixed(2)}`);
+		}
+		if (first.granted !== undefined && first.granted > 0) notes.push(`granted ${first.currency} ${first.granted.toFixed(2)}`);
 		if (parsed.is_available === false) notes.push("account unavailable");
 		return {
 			providerId: "deepseek",
 			label: "DeepSeek",
-			balance: { amount, currency },
+			balance: { amount: first.amount, currency: first.currency },
 			windows: [],
 			notes,
 			fetchedAt: Date.now(),
